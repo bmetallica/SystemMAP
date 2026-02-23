@@ -1,0 +1,526 @@
+// ─── SystemMAP – Prisma Schema ─────────────────────────────────────────────
+// Graphen-Struktur für Server, Services und deren Beziehungen
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Benutzerverwaltung ───────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  username  String   @unique
+  password  String   // bcrypt hash
+  role      UserRole @default(VIEWER)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+// ─── Server (Zielsysteme) ─────────────────────────────────────────────────
+
+model Server {
+  id        String       @id @default(uuid())
+  ip        String       @unique
+  hostname  String?
+  osInfo    String?      @map("os_info")
+  kernelInfo String?     @map("kernel_info")
+  cpuInfo   String?      @map("cpu_info")
+  memoryMb  Int?         @map("memory_mb")
+  status    ServerStatus @default(DISCOVERED)
+
+  // SSH-Zugangsdaten – verschlüsselt mit AES-256-GCM
+  sshUser              String?  @map("ssh_user")
+  sshPasswordEncrypted String?  @map("ssh_password_encrypted") // Format: iv:authTag:ciphertext
+  sshPort              Int      @default(22) @map("ssh_port")
+  sshKeyEncrypted      String?  @map("ssh_key_encrypted") // Optionaler SSH-Key, ebenfalls verschlüsselt
+
+  // Scan-Metadaten
+  lastScanAt    DateTime? @map("last_scan_at")
+  lastScanError String?   @map("last_scan_error")
+  scanSchedule  String?   @map("scan_schedule") // Cron-Ausdruck, null = nur manuell
+  rawScanData   Json?     @map("raw_scan_data") // Komplettes JSON vom Gather-Script
+
+  // KI-generierte Zusammenfassung (Cache)
+  aiSummary  String?  @map("ai_summary")  // Ausführliche KI-Zusammenfassung (3-5 Sätze)
+  aiPurpose  String?  @map("ai_purpose")  // Einzeilige Zweckbeschreibung
+  aiTags     String[] @map("ai_tags")     // KI-generierte Tags ["webserver", "reverse-proxy"]
+
+  // Relationen
+  services          Service[]
+  outgoingEdges     ConnectionEdge[] @relation("SourceServer")
+  incomingEdges     ConnectionEdge[] @relation("TargetServer")
+  processes         Process[]
+  mounts            Mount[]
+  networkInterfaces NetworkInterface[]
+  dockerContainers  DockerContainer[]
+  aiAnalyses        AiAnalysis[]
+  cronJobs          CronJob[]
+  systemdUnits      SystemdUnit[]
+  sslCertificates   SslCertificate[]
+  lvmVolumes        LvmVolume[]
+  userAccounts      UserAccount[]
+  scanSnapshots     ScanSnapshot[]
+  diffEvents        DiffEvent[]
+  alertRules        AlertRule[]
+  alerts            Alert[]
+  serverLogs        ServerLogEntry[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("servers")
+}
+
+enum ServerStatus {
+  DISCOVERED  // Gefunden (z.B. durch Nmap), aber noch nicht gescannt
+  CONFIGURED  // SSH-Daten hinterlegt, aber noch nicht gescannt
+  SCANNING    // Scan läuft gerade
+  ONLINE      // Erfolgreich gescannt
+  OFFLINE     // Nicht erreichbar
+  ERROR       // Scan-Fehler
+}
+
+// ─── Services (Ports / Dienste auf Servern) ───────────────────────────────
+
+model Service {
+  id       String       @id @default(uuid())
+  serverId String       @map("server_id")
+  server   Server       @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name     String       // z.B. nginx, postgres, sshd
+  port     Int?
+  protocol String?      // tcp, udp
+  bindAddress String?   @map("bind_address") // 0.0.0.0, 127.0.0.1, ::
+  state    ServiceState @default(ACTIVE)
+  version  String?
+  pid      Int?         // PID des lauschenden Prozesses
+  configDump Json?      @map("config_dump") // Relevante Config-Snippets als JSON
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([serverId, name, port, protocol])
+  @@map("services")
+}
+
+enum ServiceState {
+  ACTIVE
+  INACTIVE
+  UNKNOWN
+}
+
+// ─── ConnectionEdge (Beziehungen zwischen Servern) ────────────────────────
+
+model ConnectionEdge {
+  id             String          @id @default(uuid())
+  sourceServerId String          @map("source_server_id")
+  sourceServer   Server          @relation("SourceServer", fields: [sourceServerId], references: [id], onDelete: Cascade)
+  targetServerId String?         @map("target_server_id") // null = externe IP
+  targetServer   Server?         @relation("TargetServer", fields: [targetServerId], references: [id], onDelete: SetNull)
+  targetIp       String          @map("target_ip") // Immer gesetzt, auch bei internen
+  targetPort     Int             @map("target_port")
+  sourceProcess  String?         @map("source_process")
+  detectionMethod DetectionMethod @map("detection_method")
+  details        String?         // z.B. "nginx proxy_pass → backend:8080"
+  isExternal     Boolean         @default(false) @map("is_external")
+  lastSeenAt     DateTime        @default(now()) @map("last_seen_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([sourceServerId, targetIp, targetPort, sourceProcess])
+  @@map("connection_edges")
+}
+
+enum DetectionMethod {
+  SOCKET    // Aktive TCP/UDP-Verbindung (ss -ntup)
+  CONFIG    // Aus Config geparst (proxy_pass, DB-Connection etc.)
+  ARP       // ARP-Tabelle / Hosts-Datei
+  DOCKER    // Docker-Netzwerk-Beziehung
+  MANUAL    // Manuell eingetragen
+}
+
+// ─── Prozesse ─────────────────────────────────────────────────────────────
+
+model Process {
+  id       String  @id @default(uuid())
+  serverId String  @map("server_id")
+  server   Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  pid      Int
+  ppid     Int?    // Parent PID
+  user     String?
+  cpuPct   Float?  @map("cpu_pct")
+  memPct   Float?  @map("mem_pct")
+  vsizeMb  Float?  @map("vsize_mb")  // Virtual memory
+  rssMb    Float?  @map("rss_mb")    // Resident set size
+  command  String?
+  fullPath String? @map("full_path")
+  args     String?
+  cgroup   String? // cgroup (erkennt Container-Zuordnung)
+  threads  Int?    // Anzahl Threads
+  fdCount  Int?    @map("fd_count")  // Offene File-Descriptors
+  startTime String? @map("start_time") // Startzeit des Prozesses
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([serverId, pid])
+  @@map("processes")
+}
+
+// ─── Mounts / Storage ─────────────────────────────────────────────────────
+
+model Mount {
+  id         String @id @default(uuid())
+  serverId   String @map("server_id")
+  server     Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  device     String
+  mountPoint String @map("mount_point")
+  fsType     String @map("fs_type")
+  sizeMb     Int?   @map("size_mb")
+  usedMb     Int?   @map("used_mb")
+  availMb    Int?   @map("avail_mb")
+  usePct     Float? @map("use_pct")
+
+  @@unique([serverId, mountPoint])
+  @@map("mounts")
+}
+
+// ─── Netzwerk-Interfaces ──────────────────────────────────────────────────
+
+model NetworkInterface {
+  id       String @id @default(uuid())
+  serverId String @map("server_id")
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name     String // eth0, ens3 etc.
+  ipAddr   String? @map("ip_addr")
+  macAddr  String? @map("mac_addr")
+  netmask  String?
+  gateway  String?
+  state    String? // UP, DOWN
+  mtu      Int?
+  speed    String?  // Link-Speed (z.B. "1000Mb/s")
+  rxBytes  BigInt?  @map("rx_bytes")
+  txBytes  BigInt?  @map("tx_bytes")
+
+  @@unique([serverId, name, ipAddr])
+  @@map("network_interfaces")
+}
+
+// ─── Docker-Container ─────────────────────────────────────────────────────
+
+model DockerContainer {
+  id          String @id @default(uuid())
+  serverId    String @map("server_id")
+  server      Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  containerId String @map("container_id") // Docker-Container-ID
+  name        String
+  image       String
+  state       String // running, stopped, etc.
+  ports       Json?  // Port-Mappings als JSON
+  networks    Json?  // Netzwerkkonfiguration
+  envVars     Json?  @map("env_vars") // Umgebungsvariablen (Passwörter maskiert)
+  volumes     Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([serverId, containerId])
+  @@map("docker_containers")
+}
+
+// ─── KI-Einstellungen (Singleton) ─────────────────────────────────────────
+
+model AiSettings {
+  id                  Int       @id @default(1)
+
+  // ── Provider-Konfiguration ──
+  provider            String    @default("disabled")   // "disabled" | "llamacpp" | "ollama" | "openai" | "custom"
+  apiUrl              String    @default("") @map("api_url")
+  apiKey              String    @default("") @map("api_key")  // Für externe APIs (verschlüsselt)
+  model               String    @default("")
+
+  // ── Feature-Toggles (alle default: false) ──
+  enableSummary       Boolean   @default(false) @map("enable_summary")
+  enableProcessMap    Boolean   @default(false) @map("enable_process_map")
+  enableAnomaly       Boolean   @default(false) @map("enable_anomaly")
+  enableNlp           Boolean   @default(false) @map("enable_nlp")
+  enableRunbooks      Boolean   @default(false) @map("enable_runbooks")
+  enableLogAnalysis   Boolean   @default(false) @map("enable_log_analysis")
+
+  // ── Erweiterte Optionen ──
+  maxTokens           Int       @default(4096)  @map("max_tokens")
+  temperature         Float     @default(0.1)
+  contextWindow       Int       @default(16000) @map("context_window")
+  timeout             Int       @default(300)   // Sekunden pro Anfrage
+
+  // ── Blocking-Status ──
+  processMapRunning   Boolean   @default(false) @map("process_map_running")
+  processMapServerId  String?   @map("process_map_server_id")
+
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@map("ai_settings")
+}
+
+// ─── KI-Analysen ──────────────────────────────────────────────────────────
+
+model AiAnalysis {
+  id         String @id @default(uuid())
+  serverId   String @map("server_id")
+  server     Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  purpose    String? // Ermittelter Hauptzweck des Servers
+  treeJson   Json?   @map("tree_json") // Hierarchische Prozess-Baumstruktur
+  rawPrompt  String? @map("raw_prompt") // Der an das LLM gesendete Prompt
+  rawResponse String? @map("raw_response") // Die rohe LLM-Antwort
+  modelUsed  String? @map("model_used")
+  durationMs Int?    @map("duration_ms")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("ai_analyses")
+}
+
+// ─── Server-Logs (Modul 23) ──────────────────────────────────────────────
+
+model ServerLogEntry {
+  id             String   @id @default(uuid())
+  serverId       String   @map("server_id")
+  server         Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  journaldErrors String?  @map("journald_errors")  @db.Text
+  dmesgErrors    String?  @map("dmesg_errors")     @db.Text
+  syslogErrors   String?  @map("syslog_errors")    @db.Text
+  authErrors     String?  @map("auth_errors")      @db.Text
+  oomEvents      String?  @map("oom_events")       @db.Text
+  appLogs        Json?    @map("app_logs")         // { "nginx_error.log": "...", ... }
+  collectedAt    DateTime @default(now()) @map("collected_at")
+
+  @@map("server_log_entries")
+}
+
+// ─── Netzwerk-Scans (Discovery) ───────────────────────────────────────────
+
+model NetworkScan {
+  id        String          @id @default(uuid())
+  subnet    String          // z.B. "192.168.1.0/24"
+  status    NetworkScanStatus @default(PENDING)
+  schedule  String?         // Cron-Ausdruck
+  results   Json?           // Nmap-Ergebnis als JSON
+  error     String?
+  startedAt DateTime?       @map("started_at")
+  finishedAt DateTime?      @map("finished_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("network_scans")
+}
+
+enum NetworkScanStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ─── Cron-Jobs ────────────────────────────────────────────────────────────
+
+model CronJob {
+  id       String @id @default(uuid())
+  serverId String @map("server_id")
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  user     String // Cron-User
+  schedule String // Cron-Ausdruck (z.B. "0 * * * *")
+  command  String // Kommando
+  source   String? // Quelle: crontab, /etc/cron.d, systemd-timer
+
+  @@unique([serverId, user, schedule, command])
+  @@map("cron_jobs")
+}
+
+// ─── Systemd-Units (detailliert) ──────────────────────────────────────────
+
+model SystemdUnit {
+  id          String  @id @default(uuid())
+  serverId    String  @map("server_id")
+  server      Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name        String  // z.B. "nginx.service"
+  unitType    String  @map("unit_type") // service, timer, socket
+  activeState String  @map("active_state") // active, inactive, failed
+  subState    String? @map("sub_state") // running, dead, exited
+  description String?
+  execStart   String? @map("exec_start")  // ExecStart-Kommando
+  mainPid     Int?    @map("main_pid")
+  memoryMb    Float?  @map("memory_mb") // MemoryCurrent
+  cpuUsageSec Float?  @map("cpu_usage_sec") // CPUUsageNSec
+  enabled     Boolean @default(false) // UnitFileState == enabled
+
+  @@unique([serverId, name])
+  @@map("systemd_units")
+}
+
+// ─── SSL-Zertifikate ──────────────────────────────────────────────────────
+
+model SslCertificate {
+  id         String   @id @default(uuid())
+  serverId   String   @map("server_id")
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  path       String   // Pfad zur Zertifikatsdatei
+  subject    String?  // CN= ...
+  issuer     String?
+  validFrom  DateTime? @map("valid_from")
+  validTo    DateTime? @map("valid_to")
+  serial     String?
+  sanDomains Json?    @map("san_domains") // Subject Alternative Names
+  isExpired  Boolean  @default(false) @map("is_expired")
+  daysLeft   Int?     @map("days_left")
+
+  @@unique([serverId, path])
+  @@map("ssl_certificates")
+}
+
+// ─── LVM-Volumes ──────────────────────────────────────────────────────────
+
+model LvmVolume {
+  id         String  @id @default(uuid())
+  serverId   String  @map("server_id")
+  server     Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  vgName     String  @map("vg_name")  // Volume Group Name
+  lvName     String  @map("lv_name")  // Logical Volume Name
+  lvPath     String  @map("lv_path")  // z.B. /dev/mapper/vg0-lv0
+  sizeMb     Int?    @map("size_mb")
+  mountPoint String? @map("mount_point")
+  fsType     String? @map("fs_type")
+  isActive   Boolean @default(true) @map("is_active")
+
+  @@unique([serverId, lvPath])
+  @@map("lvm_volumes")
+}
+
+// ─── Benutzer-Accounts ───────────────────────────────────────────────────
+
+model UserAccount {
+  id        String  @id @default(uuid())
+  serverId  String  @map("server_id")
+  server    Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  username  String
+  uid       Int
+  gid       Int
+  shell     String?
+  homeDir   String? @map("home_dir")
+  groups    Json?   // Array von Gruppennamen
+  hasLogin  Boolean @default(false) @map("has_login") // Shell != /sbin/nologin
+  lastLogin String? @map("last_login")
+
+  @@unique([serverId, uid])
+  @@map("user_accounts")
+}
+
+// ─── Scan-Snapshots (Zustandssicherung pro Scan) ──────────────────────────
+
+model ScanSnapshot {
+  id         String   @id @default(uuid())
+  serverId   String   @map("server_id")
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  scanNumber Int      @map("scan_number")
+  data       Json     // Serialisierter Zustand: services, mounts, containers etc.
+  checksum   String   // SHA-256 zur Schnellvergleichung
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  diffs DiffEvent[] @relation("SnapshotDiffs")
+
+  @@unique([serverId, scanNumber])
+  @@map("scan_snapshots")
+}
+
+// ─── Diff-Events (erkannte Änderungen zwischen Scans) ─────────────────────
+
+model DiffEvent {
+  id           String   @id @default(uuid())
+  serverId     String   @map("server_id")
+  server       Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  snapshotId   String   @map("snapshot_id")
+  snapshot     ScanSnapshot @relation("SnapshotDiffs", fields: [snapshotId], references: [id], onDelete: Cascade)
+  category     String   // services, mounts, containers, systemd, cron, ssl, users, network, processes, docker
+  changeType   String   @map("change_type") // ADDED, REMOVED, MODIFIED
+  itemKey      String   @map("item_key")    // Eindeutiger Schlüssel (z.B. Service-Name, Mount-Pfad)
+  oldValue     Json?    @map("old_value")
+  newValue     Json?    @map("new_value")
+  severity     String   @default("INFO")    // INFO, WARNING, CRITICAL
+  acknowledged Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([serverId, createdAt])
+  @@index([severity])
+  @@map("diff_events")
+}
+
+// ─── Alert-Regeln (konfigurierbare Alarme) ────────────────────────────────
+
+model AlertRule {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  category    String    // diff, ssl, disk, systemd, scan, custom
+  condition   Json      // Flexible Regeldefinition
+  severity    String    @default("WARNING") // INFO, WARNING, CRITICAL
+  enabled     Boolean   @default(true)
+  serverId    String?   @map("server_id") // null = alle Server
+  server      Server?   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  cooldownMin Int       @default(60) @map("cooldown_min")
+  lastTriggeredAt DateTime? @map("last_triggered_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  alerts Alert[]
+
+  @@map("alert_rules")
+}
+
+// ─── Alerts (ausgelöste Alarme) ───────────────────────────────────────────
+
+model Alert {
+  id         String    @id @default(uuid())
+  ruleId     String?   @map("rule_id")
+  rule       AlertRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  serverId   String?   @map("server_id")
+  server     Server?   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  title      String
+  message    String
+  severity   String    @default("WARNING") // INFO, WARNING, CRITICAL
+  category   String
+  resolved   Boolean   @default(false)
+  resolvedAt DateTime? @map("resolved_at")
+  resolvedBy String?   @map("resolved_by")
+  metadata   Json?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([serverId, createdAt])
+  @@index([severity, resolved])
+  @@map("alerts")
+}
+
+// ─── Audit-Log ────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String   // z.B. "SERVER_CREATED", "SCAN_TRIGGERED"
+  target    String?  // z.B. "server:uuid"
+  details   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}

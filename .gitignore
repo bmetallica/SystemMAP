@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment & Secrets
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+/var/log/systemmap/
+
+# Runtime
+*.pid
+/run/systemmap/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.v1.bak
+
+# Database
+*.db
+*.sqlite
+
+# Temp
+/tmp/
+/temp/

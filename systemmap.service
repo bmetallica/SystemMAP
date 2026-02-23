@@ -1,0 +1,71 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SystemMAP – Systemd Service Unit
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Installation:
+#   sudo ./setup-service.sh
+#
+# Verwendung:
+#   sudo systemctl start systemmap      # Alle Dienste starten
+#   sudo systemctl stop systemmap       # Alle Dienste stoppen
+#   sudo systemctl restart systemmap    # Neustart
+#   sudo systemctl status systemmap     # Status anzeigen
+#   sudo systemctl enable systemmap     # Autostart bei Boot
+#   journalctl -u systemmap -f          # Logs verfolgen
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+[Unit]
+Description=SystemMAP – Linux Infrastructure Mapping Platform
+Documentation=https://github.com/bmetallica/SystemMAP
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=forking
+User=root
+Group=root
+
+# Arbeitsverzeichnis
+WorkingDirectory=__INSTALL_DIR__
+
+# Umgebungsvariablen
+EnvironmentFile=__INSTALL_DIR__/backend/.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:__NODE_BIN_DIR__
+
+# PID-File für Hauptprozess (Backend)
+PIDFile=/run/systemmap/systemmap-backend.pid
+
+# Start / Stop / Reload
+ExecStartPre=__INSTALL_DIR__/systemmap-ctl.sh prestart
+ExecStart=__INSTALL_DIR__/systemmap-ctl.sh start
+ExecStop=__INSTALL_DIR__/systemmap-ctl.sh stop
+ExecReload=__INSTALL_DIR__/systemmap-ctl.sh reload
+
+# Laufzeit-Verzeichnis für PIDs
+RuntimeDirectory=systemmap
+RuntimeDirectoryMode=0755
+
+# Restart-Verhalten
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=systemmap
+
+# Sicherheit
+NoNewPrivileges=false
+ProtectSystem=false
+PrivateTmp=false
+
+# Timeouts
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
