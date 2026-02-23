@@ -447,8 +447,13 @@ gather_routing() {
   echo ''
   echo '    ],'
   echo -n '    "search_domains": '
-  grep -E '^search|^domain' /etc/resolv.conf 2>/dev/null | awk '{$1=""; print}' | sed 's/^ //' | \\
-    python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip().split()))" 2>/dev/null || echo '[]'
+  local search_raw
+  search_raw=$(grep -E '^search|^domain' /etc/resolv.conf 2>/dev/null | awk '{$1=""; print}' | sed 's/^ //' || true)
+  if [ -n "$search_raw" ]; then
+    echo "$search_raw" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read().strip().split()))" 2>/dev/null || echo '[]'
+  else
+    echo '[]'
+  fi
   echo '  }'
 }
 `;
