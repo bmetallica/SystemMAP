@@ -1,6 +1,6 @@
-// ─── ProcessMap – Visuelle Prozess-Karte (ReactFlow) ─────────────────────
-// Phase 5.5: Zeigt Prozesse als interaktive Karte (wie Topology)
-// Zentral der Hostname, drum herum die Prozesse als Knoten mit Ports/Configs
+// ─── ProcessMap – Visuelle Prozess-Karte als Baum (ReactFlow + dagre) ────
+// Phase 6: Hierarchischer Baum: Host → Prozess → Config-Dateien → Details
+// Jeder Konfig-Eintrag ist ein eigener visueller Knoten im Graph
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import ReactFlow, {
@@ -15,6 +15,7 @@ import ReactFlow, {
   Position,
   Handle,
 } from 'reactflow';
+import dagre from 'dagre';
 import 'reactflow/dist/style.css';
 
 // ─── Typen ───────────────────────────────────────────────────────────────
@@ -76,6 +77,31 @@ function getServiceColor(serviceType?: string) {
   return DEFAULT_SVC_COLOR;
 }
 
+// ─── Detail-Knoten Farben nach Typ ───────────────────────────────────────
+
+const DETAIL_TYPE_STYLES: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+  'config_file': { bg: '#1a2332', border: '#6366f1', text: '#a5b4fc', icon: '📄' },
+  'port':        { bg: '#1a2332', border: '#3b82f6', text: '#93c5fd', icon: '🔌' },
+  'path':        { bg: '#1a2d1a', border: '#22c55e', text: '#86efac', icon: '📂' },
+  'directory':   { bg: '#1a2d1a', border: '#22c55e', text: '#86efac', icon: '📁' },
+  'vhost':       { bg: '#2d1a2d', border: '#a855f7', text: '#d8b4fe', icon: '🌐' },
+  'upstream':    { bg: '#2d2d1a', border: '#eab308', text: '#fde047', icon: '🔗' },
+  'connection':  { bg: '#2d2d1a', border: '#eab308', text: '#fde047', icon: '🔗' },
+  'volume':      { bg: '#1a2d1a', border: '#22c55e', text: '#86efac', icon: '💾' },
+  'parameter':   { bg: '#1f2937', border: '#6b7280', text: '#d1d5db', icon: '⚙️' },
+  'user':        { bg: '#2d1a1a', border: '#ef4444', text: '#fca5a5', icon: '👤' },
+  'module':      { bg: '#1a2332', border: '#06b6d4', text: '#67e8f9', icon: '📦' },
+  'database':    { bg: '#3b1f1f', border: '#ef4444', text: '#fca5a5', icon: '🗄️' },
+  'log':         { bg: '#1f3d2d', border: '#10b981', text: '#6ee7b7', icon: '📝' },
+};
+
+const DEFAULT_DETAIL_STYLE = { bg: '#1f2937', border: '#4b5563', text: '#d1d5db', icon: '•' };
+
+function getDetailStyle(type?: string) {
+  if (!type) return DEFAULT_DETAIL_STYLE;
+  return DETAIL_TYPE_STYLES[type] || DEFAULT_DETAIL_STYLE;
+}
+
 // ─── Service-Typ Icons ──────────────────────────────────────────────────
 
 const SERVICE_ICONS: Record<string, string> = {
@@ -115,7 +141,6 @@ function getProcessCategory(p: ProcessTreeData): ProcessCategory {
   const name = p.process.toLowerCase();
   const stype = (p.service_type || '').toLowerCase();
 
-  // Datenbanken
   if (stype.includes('database') || stype.includes('datenbank') || stype.includes('postgresql') ||
       stype.includes('mysql') || stype.includes('mariadb') || stype.includes('redis') ||
       stype.includes('mongo') || stype.includes('zeitreihen') || stype.includes('influx') ||
@@ -124,14 +149,12 @@ function getProcessCategory(p: ProcessTreeData): ProcessCategory {
     return 'database';
   }
 
-  // Container
   if (stype.includes('container') || stype.includes('docker') ||
       name === 'containerd' || name === 'dockerd' || name === 'docker-proxy' ||
       name === 'containerd-shim') {
     return 'container';
   }
 
-  // Netzwerk-Dienste
   if (stype.includes('ssh') || stype.includes('dns') || stype.includes('proxy') ||
       stype.includes('web') || stype.includes('mqtt') || stype.includes('mail') ||
       stype.includes('load-balancer') || stype.includes('mdns') ||
@@ -141,7 +164,6 @@ function getProcessCategory(p: ProcessTreeData): ProcessCategory {
     return 'network';
   }
 
-  // System-Prozesse
   if (SYSTEM_PROCESS_NAMES.has(name) || SYSTEM_TYPE_KEYWORDS.some(k => stype.includes(k))) {
     return 'system';
   }
@@ -157,13 +179,11 @@ const CATEGORY_LABELS: Record<ProcessCategory, { label: string; icon: string }> 
   network:     { label: 'Netzwerk', icon: '🌐' },
 };
 
-// ─── Custom Node Component ──────────────────────────────────────────────
+// ─── Custom Node: Prozess (kompakt) ──────────────────────────────────────
 
 function ProcessNode({ data }: { data: any }) {
-  const [expanded, setExpanded] = useState(false);
   const colors = getServiceColor(data.service_type);
   const icon = getServiceIcon(data.service_type);
-  const hasDetail = (data.children?.length > 0) || data.description;
 
   return (
     <div
@@ -172,16 +192,12 @@ function ProcessNode({ data }: { data: any }) {
         border: `2px solid ${colors.border}`,
         borderRadius: '12px',
         padding: '10px 14px',
-        minWidth: '170px',
-        maxWidth: '280px',
+        minWidth: '160px',
+        maxWidth: '240px',
         color: 'white',
-        cursor: hasDetail ? 'pointer' : 'default',
+        cursor: 'pointer',
         fontSize: '12px',
-        boxShadow: `0 0 12px ${colors.border}33`,
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (hasDetail) setExpanded(!expanded);
+        boxShadow: `0 0 16px ${colors.border}44`,
       }}
     >
       <Handle type="target" position={Position.Top} style={{ background: colors.border, width: 8, height: 8 }} />
@@ -205,7 +221,7 @@ function ProcessNode({ data }: { data: any }) {
         </div>
       )}
 
-      {/* Ports */}
+      {/* Ports inline */}
       {data.ports && data.ports.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-1">
           {data.ports.map((p: number) => (
@@ -227,33 +243,59 @@ function ProcessNode({ data }: { data: any }) {
         {typeof data.memory === 'number' && data.memory > 0 && <span>💾{data.memory}MB</span>}
       </div>
 
-      {/* Expanded: Children/Config details */}
-      {expanded && data.children?.length > 0 && (
-        <div className="mt-2 pt-2 border-t" style={{ borderColor: `${colors.border}44` }}>
-          {data.children.map((cat: TreeNode, i: number) => (
-            <div key={i} className="mb-1.5">
-              <div className="text-xs font-semibold" style={{ color: colors.text }}>
-                {cat.name}
-              </div>
-              {cat.children?.slice(0, 5).map((item: TreeNode, j: number) => (
-                <div key={j} className="text-xs text-gray-400 pl-2 truncate" title={item.value?.toString() || item.name}>
-                  • {item.name}{item.value ? `: ${item.value}` : ''}
-                </div>
-              ))}
-              {(cat.children?.length || 0) > 5 && (
-                <div className="text-xs text-gray-500 pl-2">+{(cat.children?.length || 0) - 5} weitere</div>
-              )}
-            </div>
-          ))}
-          {data.description && (
-            <div className="text-xs text-gray-500 italic mt-1">{data.description}</div>
-          )}
+      {/* Expand/Collapse Hinweis */}
+      {data.hasChildren && (
+        <div className="text-xs text-gray-500 mt-1 text-center">
+          {data.expanded ? '▴ Zuklappen' : `▾ ${data.childCount} Details`}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Expand indicator */}
-      {hasDetail && !expanded && (
-        <div className="text-xs text-gray-500 mt-1 text-center">▾ Details</div>
+// ─── Custom Node: Detail-Knoten (Config, Port, Pfad, etc.) ──────────────
+
+function DetailNode({ data }: { data: any }) {
+  const style = getDetailStyle(data.nodeType);
+  const hasChildren = data.hasChildren;
+
+  return (
+    <div
+      style={{
+        background: style.bg,
+        border: `1.5px solid ${style.border}`,
+        borderRadius: '8px',
+        padding: '6px 10px',
+        minWidth: '120px',
+        maxWidth: '260px',
+        color: 'white',
+        cursor: hasChildren ? 'pointer' : 'default',
+        fontSize: '11px',
+        boxShadow: `0 0 8px ${style.border}22`,
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ background: style.border, width: 6, height: 6 }} />
+      <Handle type="source" position={Position.Bottom} style={{ background: style.border, width: 6, height: 6 }} />
+
+      <div className="flex items-center gap-1.5">
+        <span className="text-sm flex-shrink-0">{style.icon}</span>
+        <div className="min-w-0">
+          <div className="text-xs font-medium truncate" style={{ color: style.text }}>
+            {data.label}
+          </div>
+          {data.value && (
+            <div className="text-xs text-gray-400 truncate font-mono" title={data.value}>
+              {data.value}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Expand indicator für Knoten mit Kindern */}
+      {hasChildren && (
+        <div className="text-xs text-gray-500 mt-0.5 text-center">
+          {data.expanded ? '▴' : `▾ ${data.childCount}`}
+        </div>
       )}
     </div>
   );
@@ -278,10 +320,7 @@ function HostNode({ data }: { data: any }) {
         boxShadow: '0 0 30px #3b82f633, 0 0 60px #3b82f611',
       }}
     >
-      <Handle type="source" position={Position.Top} style={{ background: '#3b82f6', width: 8, height: 8, top: -4 }} />
-      <Handle type="source" position={Position.Right} style={{ background: '#3b82f6', width: 8, height: 8, right: -4 }} id="right" />
-      <Handle type="source" position={Position.Bottom} style={{ background: '#3b82f6', width: 8, height: 8, bottom: -4 }} id="bottom" />
-      <Handle type="source" position={Position.Left} style={{ background: '#3b82f6', width: 8, height: 8, left: -4 }} id="left" />
+      <Handle type="source" position={Position.Bottom} style={{ background: '#3b82f6', width: 8, height: 8, bottom: -4 }} />
 
       <span className="text-2xl mb-1">🖥️</span>
       <strong className="text-xs text-center leading-tight">{data.hostname}</strong>
@@ -294,76 +333,89 @@ function HostNode({ data }: { data: any }) {
 
 const nodeTypes = {
   processNode: ProcessNode,
+  detailNode: DetailNode,
   hostNode: HostNode,
 };
 
-// ─── Layout-Berechnung: Kreis um Host ────────────────────────────────────
+// ─── Zähle Kinder rekursiv ──────────────────────────────────────────────
 
-function calculateLayout(processes: ProcessTreeData[], hostname: string) {
+function countChildren(node: TreeNode): number {
+  let count = 0;
+  if (node.children) {
+    count += node.children.length;
+    for (const child of node.children) {
+      count += countChildren(child);
+    }
+  }
+  return count;
+}
+
+// ─── Layout-Berechnung: Hierarchischer Baum mit dagre ────────────────────
+
+function calculateTreeLayout(
+  processes: ProcessTreeData[],
+  hostname: string,
+  expandedProcs: Set<string>,
+  expandedDetails: Set<string>,
+) {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
 
-  const centerX = 600;
-  const centerY = 500;
+  // dagre Graph erstellen – TB = Top-to-Bottom
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 80, edgesep: 20 });
+  g.setDefaultEdgeLabel(() => ({}));
 
-  // Host-Knoten in der Mitte
+  // Host-Knoten
+  const hostId = 'host';
+  g.setNode(hostId, { width: 120, height: 120 });
   nodes.push({
-    id: 'host',
+    id: hostId,
     type: 'hostNode',
-    position: { x: centerX - 60, y: centerY - 60 },
+    position: { x: 0, y: 0 }, // wird von dagre gesetzt
     data: { hostname, processCount: processes.length },
     draggable: true,
   });
 
-  // Prozesse sortieren: mit Ports zuerst, dann nach Typ
+  // Prozesse sortieren
   const sorted = [...processes].sort((a, b) => {
     const aScore = (a.ports?.length || 0) * 10 + (a.children?.length || 0);
     const bScore = (b.ports?.length || 0) * 10 + (b.children?.length || 0);
     return bScore - aScore;
   });
 
-  const count = sorted.length;
-  // Radius abhängig von Anzahl der Prozesse
-  const radius = Math.max(280, count * 30);
-
   sorted.forEach((proc, i) => {
-    // Position im Kreis berechnen
-    const angle = (2 * Math.PI * i) / count - Math.PI / 2;
-    const x = centerX + Math.cos(angle) * radius - 90;
-    const y = centerY + Math.sin(angle) * radius - 40;
-
-    const nodeId = `proc-${i}`;
+    const procId = `proc-${i}`;
     const colors = getServiceColor(proc.service_type);
+    const isExpanded = expandedProcs.has(procId);
+    const totalChildren = proc.children?.reduce((s, c) => s + 1 + countChildren(c), 0) || 0;
+
+    g.setNode(procId, { width: 200, height: 80 });
 
     nodes.push({
-      id: nodeId,
+      id: procId,
       type: 'processNode',
-      position: { x, y },
+      position: { x: 0, y: 0 },
       data: {
         ...proc,
+        hasChildren: totalChildren > 0,
+        childCount: totalChildren,
+        expanded: isExpanded,
       },
       draggable: true,
     });
 
-    // Edge vom Host zum Prozess
-    // Handle-Position basierend auf Winkel wählen
-    let sourceHandle: string | undefined;
-    const angleDeg = ((angle * 180) / Math.PI + 360) % 360;
-    if (angleDeg >= 315 || angleDeg < 45) sourceHandle = 'right';
-    else if (angleDeg >= 45 && angleDeg < 135) sourceHandle = 'bottom';
-    else if (angleDeg >= 135 && angleDeg < 225) sourceHandle = 'left';
-    else sourceHandle = undefined; // top (default)
-
+    // Edge: Host → Prozess
+    g.setEdge(hostId, procId);
     edges.push({
-      id: `edge-host-${nodeId}`,
-      source: 'host',
-      target: nodeId,
-      sourceHandle,
+      id: `e-host-${procId}`,
+      source: hostId,
+      target: procId,
       animated: (proc.ports?.length || 0) > 0,
       style: {
         stroke: colors.border,
-        strokeWidth: proc.children?.length > 0 ? 2 : 1,
-        opacity: proc.children?.length > 0 ? 0.8 : 0.4,
+        strokeWidth: 2,
+        opacity: 0.7,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
@@ -372,9 +424,93 @@ function calculateLayout(processes: ProcessTreeData[], hostname: string) {
         height: 12,
       },
     });
+
+    // Wenn expanded: Kinder als eigene Knoten hinzufügen (rekursiv)
+    if (isExpanded && proc.children?.length > 0) {
+      addTreeChildren(proc.children, procId, colors.border, nodes, edges, g, expandedDetails);
+    }
+  });
+
+  // dagre Layout berechnen
+  dagre.layout(g);
+
+  // Positionen aus dagre übernehmen
+  nodes.forEach(node => {
+    const dagreNode = g.node(node.id);
+    if (dagreNode) {
+      node.position = {
+        x: dagreNode.x - (dagreNode.width || 0) / 2,
+        y: dagreNode.y - (dagreNode.height || 0) / 2,
+      };
+    }
   });
 
   return { nodes, edges };
+}
+
+// ─── Rekursiv Kinder-Knoten zum Graph hinzufügen ─────────────────────────
+
+function addTreeChildren(
+  children: TreeNode[],
+  parentId: string,
+  parentColor: string,
+  nodes: Node[],
+  edges: Edge[],
+  g: dagre.graphlib.Graph,
+  expandedDetails: Set<string>,
+) {
+  children.forEach((child, j) => {
+    const childId = `${parentId}-c${j}`;
+    const style = getDetailStyle(child.type);
+    const hasChildren = (child.children?.length || 0) > 0;
+    const isExpanded = expandedDetails.has(childId);
+    const childCount = child.children?.reduce((s, c) => s + 1 + countChildren(c), 0) || 0;
+
+    // Node-Breite basierend auf Text
+    const labelLen = Math.max(child.name.length, (child.value || '').length);
+    const nodeWidth = Math.min(240, Math.max(130, labelLen * 7 + 40));
+
+    g.setNode(childId, { width: nodeWidth, height: hasChildren ? 50 : 40 });
+
+    nodes.push({
+      id: childId,
+      type: 'detailNode',
+      position: { x: 0, y: 0 },
+      data: {
+        label: child.name,
+        value: child.value || '',
+        nodeType: child.type || 'parameter',
+        hasChildren,
+        childCount,
+        expanded: isExpanded,
+      },
+      draggable: true,
+    });
+
+    // Edge: Parent → Kind
+    g.setEdge(parentId, childId);
+    edges.push({
+      id: `e-${parentId}-${childId}`,
+      source: parentId,
+      target: childId,
+      style: {
+        stroke: style.border,
+        strokeWidth: 1.5,
+        opacity: 0.6,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: style.border,
+        width: 10,
+        height: 10,
+      },
+    });
+
+    // Rekursiv Kinder, wenn expanded
+    if (isExpanded && child.children?.length) {
+      addTreeChildren(child.children, childId, style.border, nodes, edges, g, expandedDetails);
+    }
+  });
 }
 
 // ─── Hauptkomponente ─────────────────────────────────────────────────────
@@ -388,6 +524,10 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState('');
   const [selectedNode, setSelectedNode] = useState<ProcessTreeData | null>(null);
+
+  // Expand-State: Welche Prozesse & Detail-Knoten sind aufgeklappt
+  const [expandedProcs, setExpandedProcs] = useState<Set<string>>(new Set());
+  const [expandedDetails, setExpandedDetails] = useState<Set<string>>(new Set());
 
   // Kategorie-Filter (alle standardmäßig an)
   const [categoryFilters, setCategoryFilters] = useState<Record<ProcessCategory, boolean>>({
@@ -408,7 +548,6 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
 
   const filtered = useMemo(() =>
     data.filter(p => {
-      // Textsuche
       if (filter) {
         const q = filter.toLowerCase();
         const matchesText = p.process.toLowerCase().includes(q) ||
@@ -418,47 +557,102 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
           p.ports?.some(port => String(port).includes(q));
         if (!matchesText) return false;
       }
-      // Kategorie-Filter
       const cat = getProcessCategory(p);
       if (!categoryFilters[cat]) return false;
-      // Nur mit Configs
       if (showOnlyWithConfigs && (!p.children || p.children.length === 0)) return false;
-      // Nur mit Ports
       if (showOnlyWithPorts && (!p.ports || p.ports.length === 0)) return false;
       return true;
     }),
     [data, filter, categoryFilters, showOnlyWithConfigs, showOnlyWithPorts]
   );
 
-  // Kategorie-Zähler berechnen
+  // Kategorie-Zähler
   const categoryCounts = useMemo(() => {
     const counts: Record<ProcessCategory, number> = { application: 0, system: 0, container: 0, database: 0, network: 0 };
     data.forEach(p => { counts[getProcessCategory(p)]++; });
     return counts;
   }, [data]);
 
-  const { nodes: initialNodes, edges: initialEdges } = useMemo(
-    () => calculateLayout(filtered, hostname),
-    [filtered, hostname]
+  // Layout berechnen (re-calculated wenn expand-state oder filter sich ändert)
+  const { nodes: layoutNodes, edges: layoutEdges } = useMemo(
+    () => calculateTreeLayout(filtered, hostname, expandedProcs, expandedDetails),
+    [filtered, hostname, expandedProcs, expandedDetails]
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(layoutNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutEdges);
 
-  // Update nodes/edges when filter changes
+  // Update nodes/edges wenn sich Layout ändert
   useEffect(() => {
-    const layout = calculateLayout(filtered, hostname);
-    setNodes(layout.nodes);
-    setEdges(layout.edges);
-  }, [filtered, hostname]);
+    setNodes(layoutNodes);
+    setEdges(layoutEdges);
+  }, [layoutNodes, layoutEdges]);
 
+  // Klick auf Knoten: Toggle expand/collapse
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     if (node.id === 'host') {
       setSelectedNode(null);
       return;
     }
-    setSelectedNode(node.data as ProcessTreeData);
+
+    // Prozess-Knoten: Details anzeigen + expand toggle
+    if (node.id.startsWith('proc-')) {
+      // Prozess-Daten für Detail-Panel
+      const procData = node.data as ProcessTreeData & { hasChildren: boolean };
+      setSelectedNode(procData);
+
+      // Expand/Collapse
+      if (procData.hasChildren) {
+        setExpandedProcs(prev => {
+          const next = new Set(prev);
+          if (next.has(node.id)) {
+            next.delete(node.id);
+            // Auch alle Kinder-Detail-Knoten zuklappen
+            setExpandedDetails(prevD => {
+              const nextD = new Set(prevD);
+              for (const key of nextD) {
+                if (key.startsWith(node.id + '-')) nextD.delete(key);
+              }
+              return nextD;
+            });
+          } else {
+            next.add(node.id);
+          }
+          return next;
+        });
+      }
+      return;
+    }
+
+    // Detail-Knoten: expand/collapse Kinder
+    if (node.data.hasChildren) {
+      setExpandedDetails(prev => {
+        const next = new Set(prev);
+        if (next.has(node.id)) {
+          next.delete(node.id);
+          // Auch alle tiefer verschachtelten zuklappen
+          for (const key of next) {
+            if (key.startsWith(node.id + '-')) next.delete(key);
+          }
+        } else {
+          next.add(node.id);
+        }
+        return next;
+      });
+    }
   }, []);
+
+  // Alle Prozesse auf-/zuklappen
+  const toggleExpandAll = useCallback(() => {
+    if (expandedProcs.size > 0) {
+      setExpandedProcs(new Set());
+      setExpandedDetails(new Set());
+    } else {
+      const allProcs = new Set<string>();
+      filtered.forEach((_, i) => allProcs.add(`proc-${i}`));
+      setExpandedProcs(allProcs);
+    }
+  }, [expandedProcs, filtered]);
 
   // Stats
   const totalPorts = data.reduce((s, p) => s + (p.ports?.length || 0), 0);
@@ -476,6 +670,12 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
             onChange={(e) => setFilter(e.target.value)}
             className="flex-1 max-w-xs bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
           />
+          <button
+            onClick={toggleExpandAll}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-800 border border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white transition-all"
+          >
+            {expandedProcs.size > 0 ? '🔽 Alle zuklappen' : '🔼 Alle aufklappen'}
+          </button>
           <div className="flex items-center gap-3 text-xs text-gray-400">
             <span>📦 {filtered.length}/{data.length} Prozesse</span>
             <span>🔌 {totalPorts} Ports</span>
@@ -506,7 +706,6 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
 
           <div className="w-px h-5 bg-gray-700 mx-1" />
 
-          {/* Toggle: Nur mit Configs */}
           <button
             onClick={() => setShowOnlyWithConfigs(!showOnlyWithConfigs)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
@@ -519,7 +718,6 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
             <span>Nur mit Configs</span>
           </button>
 
-          {/* Toggle: Nur mit Ports */}
           <button
             onClick={() => setShowOnlyWithPorts(!showOnlyWithPorts)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
@@ -549,19 +747,19 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.15 }}
-          minZoom={0.2}
-          maxZoom={2}
+          minZoom={0.1}
+          maxZoom={2.5}
           attributionPosition="bottom-left"
         >
           <Background color="#374151" gap={24} size={1} />
-          <Controls
-            showZoom={true}
-            showFitView={true}
-            showInteractive={false}
-          />
+          <Controls showZoom={true} showFitView={true} showInteractive={false} />
           <MiniMap
             nodeColor={(node) => {
               if (node.type === 'hostNode') return '#3b82f6';
+              if (node.type === 'detailNode') {
+                const style = getDetailStyle(node.data?.nodeType);
+                return style.border;
+              }
               const colors = getServiceColor(node.data?.service_type);
               return colors.border;
             }}
@@ -584,7 +782,6 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
               >✕</button>
             </div>
 
-            {/* Meta */}
             <div className="space-y-1.5 mb-3 text-xs">
               {selectedNode.service_type && selectedNode.service_type !== 'process' && (
                 <div className="flex justify-between">
@@ -630,42 +827,26 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
               )}
             </div>
 
-            {/* Description */}
             {selectedNode.description && (
               <p className="text-xs text-gray-400 italic mb-3 border-t border-gray-700 pt-2">
                 {selectedNode.description}
               </p>
             )}
 
-            {/* Tree Categories */}
+            {/* Hinweis: Klicken zum Aufklappen */}
             {selectedNode.children?.length > 0 && (
               <div className="border-t border-gray-700 pt-2">
-                <div className="text-xs font-semibold text-gray-300 mb-2">Konfiguration</div>
-                {selectedNode.children.map((cat, i) => (
-                  <div key={i} className="mb-2">
-                    <div className="text-xs font-medium text-blue-400">{cat.name}</div>
-                    {cat.children?.map((item, j) => (
-                      <div key={j} className="text-xs text-gray-400 pl-3 py-0.5 truncate" title={String(item.value || item.name)}>
-                        <span className="text-gray-500 mr-1">
-                          {item.type === 'port' ? '🔌' : item.type === 'path' ? '📁' : item.type === 'module' ? '📦' : item.type === 'connection' ? '🔗' : '•'}
-                        </span>
-                        {item.name}
-                        {item.value && (
-                          <span className="text-gray-500 ml-1">
-                            = {typeof item.value === 'object' ? JSON.stringify(item.value) : item.value}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ))}
+                <div className="text-xs text-gray-500 italic">
+                  💡 Klicke auf den Prozess-Knoten im Graph, um die Konfiguration als Baum aufzuklappen
+                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Legend (bottom-left above controls) */}
+        {/* Legende */}
         <div className="absolute bottom-14 left-3 flex flex-col gap-1 bg-gray-800/90 backdrop-blur rounded-lg p-2 border border-gray-700 z-10">
+          <div className="text-xs text-gray-500 font-semibold mb-0.5">Prozesse</div>
           {[
             ['🌐', 'Webserver/Proxy', '#3b82f6'],
             ['🗄️', 'Datenbank', '#ef4444'],
@@ -673,6 +854,20 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
             ['📊', 'Monitoring', '#a855f7'],
             ['📡', 'IoT/MQTT', '#f59e0b'],
             ['⚙️', 'System/Service', '#6b7280'],
+          ].map(([icon, label, color]) => (
+            <div key={label} className="flex items-center gap-1.5 text-xs">
+              <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color as string }} />
+              <span className="text-gray-400">{icon} {label}</span>
+            </div>
+          ))}
+          <div className="text-xs text-gray-500 font-semibold mt-1 mb-0.5">Details</div>
+          {[
+            ['📄', 'Config-Datei', '#6366f1'],
+            ['🔌', 'Port', '#3b82f6'],
+            ['📁', 'Verzeichnis', '#22c55e'],
+            ['🌐', 'VHost', '#a855f7'],
+            ['📦', 'Modul', '#06b6d4'],
+            ['📝', 'Log', '#10b981'],
           ].map(([icon, label, color]) => (
             <div key={label} className="flex items-center gap-1.5 text-xs">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color as string }} />

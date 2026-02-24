@@ -52,13 +52,59 @@ function parseDate(dateStr: string | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** Entfernt ungültige Unicode-Zeichen aus einem String (verhindert JSON/PostgreSQL-Fehler) */
+function sanitizeString(str: string): string {
+  let result = '';
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    // \u0000 (Null-Byte) kann nicht in PostgreSQL text/jsonb gespeichert werden
+    if (code === 0x0000) {
+      continue; // Null-Bytes komplett entfernen
+    }
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      // High surrogate – prüfe ob ein gültiges Low-Surrogate folgt
+      if (i + 1 < str.length) {
+        const next = str.charCodeAt(i + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          result += str[i] + str[i + 1];
+          i++;
+          continue;
+        }
+      }
+      result += '\uFFFD'; // Ersetze lone High-Surrogate
+    } else if (code >= 0xDC00 && code <= 0xDFFF) {
+      result += '\uFFFD'; // Ersetze lone Low-Surrogate
+    } else {
+      result += str[i];
+    }
+  }
+  return result;
+}
+
+/** Rekursive Bereinigung aller Strings in einem Objekt/Array */
+function sanitizeData(data: any): any {
+  if (data === null || data === undefined) return data;
+  if (typeof data === 'string') return sanitizeString(data);
+  if (Array.isArray(data)) return data.map(sanitizeData);
+  if (typeof data === 'object') {
+    const clean: Record<string, any> = {};
+    for (const key of Object.keys(data)) {
+      clean[key] = sanitizeData(data[key]);
+    }
+    return clean;
+  }
+  return data;
+}
+
 // ─── Hauptfunktion ───────────────────────────────────────────────────────
 
 /**
  * Verarbeitet die Gather-Script-Daten und schreibt sie in die Datenbank.
  * Alle Operationen in einer Transaktion.
  */
-export async function mapScanDataToDb(serverId: string, rawData: any): Promise<MapperStats> {
+export async function mapScanDataToDb(serverId: string, rawDataUnsafe: any): Promise<MapperStats> {
+  // Unicode-Surrogate bereinigen (verhindert "lone leading surrogate" Fehler bei PostgreSQL JSON)
+  const rawData = sanitizeData(rawDataUnsafe);
   logger.info(`📦 Mapping Scan-Daten für Server ${serverId}...`);
 
   const stats: MapperStats = {

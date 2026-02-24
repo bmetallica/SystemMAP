@@ -1082,30 +1082,50 @@ Antworte NUR als JSON:
       ? `\n\n## Discovery-Output\n\n\`\`\`\n${discoveryOutput.substring(0, 5000)}\n\`\`\`\n`
       : '';
 
-    const prompt = `Analysiere den Linux-Prozess "${processName}" (${executable}) und erstelle eine hierarchische Baumstruktur, die seine Konfiguration und sein Verhalten beschreibt.
+    const prompt = `Analysiere den Linux-Prozess "${processName}" (${executable}) und erstelle eine hierarchische Baumstruktur seiner Konfiguration.
 
 ${configsMd}${discoverySection}
 
-Erstelle eine JSON-Baumstruktur. Jeder Knoten hat:
-- "name": Bezeichnung (z.B. "http_port", "Netzwerk", "Cache")
-- "type": Knotentyp – einer von: "category", "port", "path", "config", "connection", "volume", "parameter", "user", "cron", "module"
-- "value": Wert (optional, z.B. "3128", "/var/log/squid")
-- "children": Unterknoten (optional)
+WICHTIG: Erstelle eine **lineare Kette** von Knoten, die den Informationsfluss abbildet.
+Jeder Knoten hat:
+- "name": Bezeichnung (z.B. "Listen-Port", "Document-Root", "Upstream-Server")
+- "type": Knotentyp – einer von: "config_file", "port", "path", "directory", "vhost", "upstream", "connection", "volume", "parameter", "user", "module", "database", "log"
+- "value": Konkreter Wert (z.B. "80", "/var/www/html", "/etc/nginx/nginx.conf")
+- "children": Weitere Detail-Knoten (optional, maximal 1 Ebene tief)
 
-Kategorisiere sinnvoll in: Netzwerk (Ports, Listen-Adressen), Storage (Pfade, Cache, Logs), Sicherheit (User, Berechtigungen), Module/Plugins, Verbindungen (Upstream, Backend), Konfiguration (wichtige Parameter).
+Die Struktur soll einen **Baum** ergeben, bei dem jeder Detail-Knoten als eigener visueller Knoten dargestellt wird.
+Gruppiere NICHT nach abstrakten Kategorien wie "Netzwerk" oder "Storage", sondern bilde die **reale Konfigurationsstruktur** ab.
+
+Beispiel für Apache2:
+- Hauptconfig → /etc/apache2/apache2.conf
+  - VHost → default (Port 80) → Document-Root /var/www/html
+  - VHost → ssl-site (Port 443) → Document-Root /var/www/secure → SSL-Cert /etc/ssl/...
+  - Modul → mod_rewrite
+  - Modul → mod_ssl
+  - Log → /var/log/apache2/access.log
+
+Beispiel für PostgreSQL:
+- Hauptconfig → /etc/postgresql/16/main/postgresql.conf
+  - Listen → Port 5432 → Bind 127.0.0.1
+  - Datenbank → mydb
+  - Log → /var/log/postgresql/postgresql-16-main.log
+  - HBA → /etc/postgresql/16/main/pg_hba.conf → local trust → host md5
 
 Antworte NUR als JSON:
 {
   "process": "${processName}",
   "executable": "${executable}",
-  "service_type": "Typ des Dienstes (z.B. Webserver, Datenbank, Proxy)",
+  "service_type": "Typ des Dienstes (z.B. Webserver, Datenbank, Proxy, Container Runtime)",
   "description": "Kurze Beschreibung was der Dienst tut (1 Satz)",
   "children": [
     {
-      "name": "Netzwerk",
-      "type": "category",
+      "name": "Hauptconfig",
+      "type": "config_file",
+      "value": "/etc/example/main.conf",
       "children": [
-        { "name": "http_port", "type": "port", "value": "80" }
+        { "name": "Listen-Port", "type": "port", "value": "8080" },
+        { "name": "Document-Root", "type": "directory", "value": "/var/www/html" },
+        { "name": "Access-Log", "type": "log", "value": "/var/log/example/access.log" }
       ]
     }
   ]
