@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
-import api from '../api/client';
+import api, { isOnline, onConnectionChange } from '../api/client';
 
 interface NavItem {
   to: string;
@@ -31,6 +31,20 @@ export default function Layout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [online, setOnline] = useState(isOnline());
+  const [showReconnected, setShowReconnected] = useState(false);
+
+  // ─── Verbindungsstatus überwachen ──────────────────────────────────
+  useEffect(() => {
+    return onConnectionChange((v) => {
+      setOnline(v);
+      if (v) {
+        // Kurz "Wieder verbunden" anzeigen, dann ausblenden
+        setShowReconnected(true);
+        setTimeout(() => setShowReconnected(false), 4000);
+      }
+    });
+  }, []);
 
   // KI-Status laden um Nav-Eintrag ein/auszublenden
   useEffect(() => {
@@ -106,6 +120,19 @@ export default function Layout() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
+        {/* ─── Verbindungsstatus-Banner ─────────────────────────────── */}
+        {!online && (
+          <div className="bg-red-900/90 border-b border-red-700 px-4 py-2 text-center text-red-200 text-sm flex items-center justify-center gap-2 animate-pulse">
+            <span className="text-lg">📡</span>
+            Verbindung verloren – Anfragen werden automatisch wiederholt…
+          </div>
+        )}
+        {online && showReconnected && (
+          <div className="bg-green-900/90 border-b border-green-700 px-4 py-2 text-center text-green-200 text-sm flex items-center justify-center gap-2">
+            <span className="text-lg">✅</span>
+            Verbindung wiederhergestellt
+          </div>
+        )}
         <div className="p-6">
           <Outlet />
         </div>
