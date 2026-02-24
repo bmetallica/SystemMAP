@@ -78,15 +78,15 @@ export interface KnownServiceCommand {
 }
 
 export const KNOWN_COMMANDS: Record<string, KnownServiceCommand> = {
-  apache2:          { serviceType: 'Webserver',           label: 'VHosts, Module, Ports',        command: "apache2ctl -S 2>&1 ; echo '---' ; apache2ctl -M 2>&1 ; echo '---' ; ss -tlnp | grep apache2" },
+  apache2:          { serviceType: 'Webserver',           label: 'VHosts, Module, Ports',        command: "apache2ctl -S 2>&1 | head -30 ; echo '---MODULES---' ; apache2ctl -M 2>&1 | grep -v 'Loaded Modules' | head -30 ; echo '---PORTS---' ; ss -tlnp | grep apache2 ; echo '---SITES---' ; ls -la /etc/apache2/sites-enabled/ 2>/dev/null ; echo '---INCLUDES---' ; grep -rh 'IncludeOptional\\|Include ' /etc/apache2/apache2.conf 2>/dev/null" },
   apcupsd:          { serviceType: 'USV-Management',      label: 'USV-Status, Batterie',         command: 'apcaccess status 2>&1' },
   containerd:       { serviceType: 'Container-Runtime',   label: 'Container, Version',           command: "ctr --namespace moby containers list 2>&1 ; echo '---' ; containerd --version 2>&1" },
   'containerd-shim':{ serviceType: 'Container-Shim',      label: 'Shim-Prozesse',                command: 'ps -C containerd-shim -o pid,ppid,vsz,rss,etime,args' },
   dockerd:          { serviceType: 'Docker-Daemon',        label: 'Container, Images, Netzwerke', command: "docker ps -a --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}' 2>&1 ; echo '---' ; docker images --format 'table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}' 2>&1 ; echo '---' ; docker network ls 2>&1" },
   'docker-proxy':   { serviceType: 'Docker-Port-Proxy',   label: 'Portmappings',                 command: 'ss -tlnp | grep docker-proxy ; echo \'---\' ; ps -C docker-proxy -o pid,args' },
-  postgres:         { serviceType: 'PostgreSQL',           label: 'Datenbanken, Verbindungen',    command: "sudo -u postgres psql -c '\\l' 2>&1 ; echo '---' ; sudo -u postgres psql -c 'SELECT datname,usename,client_addr,state FROM pg_stat_activity;' 2>&1" },
-  squid:            { serviceType: 'Proxy-Server',         label: 'Cache, Ports, Config-Check',   command: "squid -k parse 2>&1 ; echo '---' ; ss -tlnp | grep squid" },
-  sshd:             { serviceType: 'SSH-Server',           label: 'Sessions, Config, Version',    command: "who 2>&1 ; echo '---' ; sshd -T 2>&1 | grep -iE '^(port |listenaddress |permitroot|passwordauth)' ; echo '---' ; ssh -V 2>&1" },
+  postgres:         { serviceType: 'PostgreSQL',           label: 'Datenbanken, Verbindungen',    command: "sudo -u postgres psql -c '\\l' 2>&1 ; echo '---' ; sudo -u postgres psql -c 'SHOW port; SHOW listen_addresses; SHOW max_connections; SHOW data_directory;' 2>&1 ; echo '---' ; ss -tlnp | grep postgres" },
+  squid:            { serviceType: 'Proxy-Server',         label: 'Cache, Ports, ACLs',           command: "grep -vE '^\\s*(#|$)' /etc/squid/squid.conf 2>/dev/null | head -40 ; echo '---' ; squid -k parse 2>&1 | head -30 ; echo '---' ; ss -tlnp | grep squid" },
+  sshd:             { serviceType: 'SSH-Server',           label: 'Sessions, Config, Version',    command: "who 2>&1 ; echo '---CONFIG---' ; sshd -T 2>&1 | grep -iE '^(port |listenaddress |permitroot|passwordauth|maxauthtries|pubkeyauth|x11forwarding|allowusers|allowgroups|subsystem)' ; echo '---PORTS---' ; ss -tlnp | grep sshd ; echo '---' ; ssh -V 2>&1" },
   snmpd:            { serviceType: 'SNMP-Agent',           label: 'Version, Ports',               command: "snmpd -v 2>&1 | head -2 ; echo '---' ; ss -ulnp | grep snmpd" },
   homegear:         { serviceType: 'Smart-Home-Zentrale',  label: 'Version, Familien, Ports',     command: "homegear -v 2>&1 ; echo '---' ; ss -tlnp | grep homegear" },
   'homegear-manage':{ serviceType: 'Homegear-Management', label: 'Prozess-Info',                 command: 'ps -C homegear-manage -o pid,vsz,rss,etime,cmd' },
@@ -98,7 +98,7 @@ export const KNOWN_COMMANDS: Record<string, KnownServiceCommand> = {
   fusermount3:      { serviceType: 'FUSE-Mount',           label: 'Aktive FUSE-Mounts',           command: "mount | grep fuse ; echo '---' ; fusermount3 --version 2>&1" },
   pinger:           { serviceType: 'Pinger-Dienst',        label: 'Ports, Prozess',               command: "ss -tlnp | grep pinger ; echo '---' ; ps -C pinger -o pid,vsz,rss,etime,args" },
   log_file_daemon:  { serviceType: 'Log-Daemon',           label: 'Prozess-Info',                 command: "ps -C log_file_daemon -o pid,vsz,rss,etime,args ; echo '---' ; ss -tlnp | grep log_file" },
-  nginx:            { serviceType: 'Webserver',            label: 'VHosts, Module',               command: "nginx -T 2>&1 | head -80 ; echo '---' ; ss -tlnp | grep nginx" },
+  nginx:            { serviceType: 'Webserver',            label: 'VHosts, Module',               command: "nginx -T 2>&1 | head -120 ; echo '---PORTS---' ; ss -tlnp | grep nginx ; echo '---SITES---' ; ls -la /etc/nginx/sites-enabled/ 2>/dev/null ; ls -la /etc/nginx/conf.d/ 2>/dev/null" },
   mysql:            { serviceType: 'MySQL/MariaDB',        label: 'Datenbanken, Status',          command: "mysql -e 'SHOW DATABASES; SHOW GLOBAL STATUS LIKE \"Threads%\"; SHOW GLOBAL STATUS LIKE \"Connections\";' 2>&1" },
   redis:            { serviceType: 'Redis',                label: 'Info, Clients',                command: "redis-cli INFO server 2>&1 | head -20 ; echo '---' ; redis-cli INFO clients 2>&1" },
   mongod:           { serviceType: 'MongoDB',              label: 'Datenbanken, Status',          command: "mongosh --eval 'db.adminCommand({listDatabases:1})' 2>&1 | head -30" },

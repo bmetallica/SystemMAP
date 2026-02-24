@@ -1075,6 +1075,9 @@ Antworte NUR als JSON:
   /**
    * Schritt 5: Baumstruktur für einen einzelnen Prozess generieren.
    * Kernfunktion portiert aus ansatz2/baum_struktur.py.
+   * 
+   * NEU: Pre-Parser extrahiert Ports, Includes, VHosts etc. VOR der KI-Analyse
+   * und gibt sie dem Prompt als strukturiertes "Cheat Sheet" mit.
    */
   async generateProcessTree(
     processName: string,
@@ -1082,60 +1085,85 @@ Antworte NUR als JSON:
     configContents: Array<{ path: string; content: string }>,
     discoveryOutput?: string,
   ): Promise<ProcessTreeResult> {
+    // ─── Pre-Parser: Extrahiert Key-Values aus bekannten Config-Formaten ──
+    const highlights = this.extractConfigHighlights(configContents);
+    const highlightsSection = highlights.length > 0
+      ? `\n\n## VORAB EXTRAHIERTE CONFIG-WERTE (bitte in den Baum übernehmen!)\n\n${highlights.join('\n')}\n`
+      : '';
+
     // Config-Inhalte als Markdown aufbereiten
     const configsMd = configContents
       .map((c) => this.configToMarkdown(c.path, this.compressConfig(c.content, 8000)))
       .join('\n\n');
 
     const discoverySection = discoveryOutput
-      ? `\n\n## Discovery-Output\n\n\`\`\`\n${discoveryOutput.substring(0, 5000)}\n\`\`\`\n`
+      ? `\n\n## Discovery-Output (Port-Info, Status etc.)\n\n\`\`\`\n${discoveryOutput.substring(0, 5000)}\n\`\`\`\n`
       : '';
 
     const prompt = `Analysiere den Linux-Prozess "${processName}" (${executable}) und erstelle eine hierarchische Baumstruktur seiner Konfiguration.
 
-${configsMd}${discoverySection}
+${configsMd}${highlightsSection}${discoverySection}
 
 WICHTIG: Erstelle einen **mehrstufigen Baum**, der die echte Konfigurationsstruktur des Dienstes abbildet.
 Jeder Knoten hat:
 - "name": Bezeichnung (z.B. Dateiname, Parameter-Name, VHost-Name)
-- "type": Knotentyp – einer von: "config_file", "port", "path", "directory", "vhost", "upstream", "connection", "volume", "parameter", "user", "module", "database", "log"
-- "value": Konkreter Wert (z.B. "80", "/var/www/html", "/etc/nginx/nginx.conf")
+- "type": Knotentyp – einer von: "config_file", "port", "path", "directory", "vhost", "upstream", "connection", "volume", "parameter", "user", "module", "database", "log", "acl"
+- "value": Konkreter Wert (z.B. "80", "/var/www/html", "/etc/squid/squid.conf")
 - "children": Array von Kind-Knoten (beliebig tief verschachtelt!)
 
 REGELN:
-1. Bilde die **tatsächliche Datei-Include-Struktur** ab. Apache hat z.B. apache2.conf, die sites-enabled/*.conf einbindet. Jede eingebundene Datei wird ein eigener Kindknoten.
-2. Jede Config-Datei die du in den Eingabedaten siehst, muss als eigener Knoten mit type="config_file" erscheinen.
-3. Unter jeder Config-Datei hängen deren Inhalte: VHosts, Ports, Directories, Module etc.
-4. Ordne Informationen der RICHTIGEN Datei zu! DocumentRoot aus sites-enabled/000-default.conf gehört unter diese Datei, NICHT unter apache2.conf.
-5. Verschachtelung ist erlaubt und erwünscht: config_file → vhost → directory → parameter
+1. JEDE Config-Datei die du in den Eingabedaten siehst → eigener Knoten mit type="config_file"
+2. Unter jeder Config-Datei hängen DEREN Inhalte: Ports, Directories, VHosts, ACLs, Module etc.
+3. Ordne jede Information der RICHTIGEN Config-Datei zu! Wenn ein Port in /etc/squid/squid.conf steht, gehört er unter diesen config_file-Knoten.
+4. PORTS SIND PFLICHT: Wenn ein Port in einer Config-Datei oder im Discovery-Output vorkommt, MUSS er als type="port" Knoten erscheinen.
+5. Wenn Include/IncludeOptional auf andere Dateien verweist und diese Dateien in den Eingabedaten vorhanden sind, werden sie als Kind-Knoten unter der inkludierenden Datei angehängt.
+6. Wenn die vorab extrahierten Config-Werte einen Wert zeigen (z.B. http_port 3128), MUSS dieser Wert im Baum erscheinen.
+7. Verschachtelung ist erwünscht: config_file → vhost → directory → parameter
 
-Beispiel für Apache2:
+BEISPIEL für Squid-Proxy:
+{
+  "children": [
+    {
+      "name": "squid.conf", "type": "config_file", "value": "/etc/squid/squid.conf",
+      "children": [
+        { "name": "http_port", "type": "port", "value": "3128" },
+        { "name": "cache_dir", "type": "directory", "value": "ufs /var/spool/squid 100 16 256" },
+        { "name": "cache_mem", "type": "parameter", "value": "256 MB" },
+        { "name": "acl localnet", "type": "acl", "value": "src 192.168.0.0/16" },
+        { "name": "http_access allow localnet", "type": "parameter", "value": "allow" },
+        { "name": "access_log", "type": "log", "value": "/var/log/squid/access.log" },
+        { "name": "coredump_dir", "type": "directory", "value": "/var/spool/squid" }
+      ]
+    }
+  ]
+}
+
+BEISPIEL für Apache2 (BEACHTE Include-Hierarchie!):
 {
   "children": [
     {
       "name": "apache2.conf", "type": "config_file", "value": "/etc/apache2/apache2.conf",
       "children": [
         { "name": "ServerRoot", "type": "directory", "value": "/etc/apache2" },
+        { "name": "Timeout", "type": "parameter", "value": "300" },
         { "name": "ErrorLog", "type": "log", "value": "/var/log/apache2/error.log" },
-        { "name": "Timeout", "type": "parameter", "value": "300" }
-      ]
-    },
-    {
-      "name": "ports.conf", "type": "config_file", "value": "/etc/apache2/ports.conf",
-      "children": [
-        { "name": "Listen", "type": "port", "value": "80" },
-        { "name": "Listen HTTPS", "type": "port", "value": "443" }
-      ]
-    },
-    {
-      "name": "000-default.conf", "type": "config_file", "value": "/etc/apache2/sites-enabled/000-default.conf",
-      "children": [
         {
-          "name": "VHost *:80", "type": "vhost", "value": "*:80",
+          "name": "ports.conf", "type": "config_file", "value": "/etc/apache2/ports.conf",
           "children": [
-            { "name": "DocumentRoot", "type": "directory", "value": "/var/www/html" },
-            { "name": "ServerAdmin", "type": "parameter", "value": "webmaster@localhost" },
-            { "name": "AccessLog", "type": "log", "value": "/var/log/apache2/access.log" }
+            { "name": "Listen", "type": "port", "value": "80" }
+          ]
+        },
+        {
+          "name": "000-default.conf", "type": "config_file", "value": "/etc/apache2/sites-enabled/000-default.conf",
+          "children": [
+            {
+              "name": "VirtualHost *:80", "type": "vhost", "value": "*:80",
+              "children": [
+                { "name": "DocumentRoot", "type": "directory", "value": "/var/www/html" },
+                { "name": "ServerAdmin", "type": "parameter", "value": "webmaster@localhost" },
+                { "name": "ErrorLog", "type": "log", "value": "\${APACHE_LOG_DIR}/error.log" }
+              ]
+            }
           ]
         }
       ]
@@ -1145,14 +1173,29 @@ Beispiel für Apache2:
   ]
 }
 
-Beispiel für PostgreSQL:
+BEISPIEL für SSH:
+{
+  "children": [
+    {
+      "name": "sshd_config", "type": "config_file", "value": "/etc/ssh/sshd_config",
+      "children": [
+        { "name": "Port", "type": "port", "value": "22" },
+        { "name": "PermitRootLogin", "type": "parameter", "value": "yes" },
+        { "name": "PasswordAuthentication", "type": "parameter", "value": "yes" },
+        { "name": "MaxAuthTries", "type": "parameter", "value": "6" }
+      ]
+    }
+  ]
+}
+
+BEISPIEL für PostgreSQL:
 {
   "children": [
     {
       "name": "postgresql.conf", "type": "config_file", "value": "/etc/postgresql/16/main/postgresql.conf",
       "children": [
-        { "name": "listen_addresses", "type": "parameter", "value": "localhost" },
         { "name": "port", "type": "port", "value": "5432" },
+        { "name": "listen_addresses", "type": "parameter", "value": "localhost" },
         { "name": "max_connections", "type": "parameter", "value": "100" },
         { "name": "data_directory", "type": "directory", "value": "/var/lib/postgresql/16/main" },
         { "name": "log_directory", "type": "log", "value": "/var/log/postgresql" }
@@ -1161,8 +1204,8 @@ Beispiel für PostgreSQL:
     {
       "name": "pg_hba.conf", "type": "config_file", "value": "/etc/postgresql/16/main/pg_hba.conf",
       "children": [
-        { "name": "local all all", "type": "parameter", "value": "peer" },
-        { "name": "host all all 127.0.0.1/32", "type": "parameter", "value": "md5" }
+        { "name": "local all all", "type": "connection", "value": "peer" },
+        { "name": "host all all 127.0.0.1/32", "type": "connection", "value": "scram-sha-256" }
       ]
     }
   ]
@@ -1172,9 +1215,9 @@ Antworte NUR als JSON:
 {
   "process": "${processName}",
   "executable": "${executable}",
-  "service_type": "Typ des Dienstes (z.B. Webserver, Datenbank, Proxy, Container Runtime)",
+  "service_type": "Typ des Dienstes (z.B. Webserver, Datenbank, Proxy, SSH-Server, Container Runtime)",
   "description": "Kurze Beschreibung was der Dienst tut (1 Satz)",
-  "children": [ ... wie oben beschrieben ... ]
+  "children": [ ... Config-Dateien mit verschachtelten Inhalten wie oben ... ]
 }`;
 
     const { data, response } = await this.chatJson<ProcessTreeResult>(prompt, {
@@ -1190,6 +1233,132 @@ Antworte NUR als JSON:
     data.children = data.children || [];
 
     return data;
+  }
+
+  /**
+   * Pre-Parser: Extrahiert wichtige Config-Werte BEVOR die KI sie analysiert.
+   * Das entlastet das kleine Modell und stellt sicher, dass Ports, Includes,
+   * VHosts, ACLs etc. nicht übersehen werden.
+   */
+  private extractConfigHighlights(
+    configs: Array<{ path: string; content: string }>
+  ): string[] {
+    const highlights: string[] = [];
+
+    // Regex-Patterns für wichtige Config-Direktiven
+    const PATTERNS: Array<{
+      regex: RegExp;
+      label: string;
+      type: string;
+    }> = [
+      // ─── Ports ──────────────────────────────────────────────
+      { regex: /^\s*(?:http_port|https_port)\s+(.+)/im,          label: 'PORT',        type: 'port' },
+      { regex: /^\s*Listen\s+(.+)/im,                            label: 'PORT',        type: 'port' },
+      { regex: /^\s*(?:port|bind-port)\s*[=:]\s*(.+)/im,         label: 'PORT',        type: 'port' },
+      { regex: /^\s*port\s+(\d+)/im,                             label: 'PORT',        type: 'port' },
+      { regex: /^\s*bind\s+(.+)/im,                              label: 'BIND',        type: 'port' },
+      { regex: /^\s*listen_addresses\s*=\s*'?([^'#\n]+)/im,      label: 'LISTEN',      type: 'parameter' },
+
+      // ─── VHosts / Server-Blöcke ─────────────────────────────
+      { regex: /^\s*<VirtualHost\s+([^>]+)>/im,                  label: 'VHOST',       type: 'vhost' },
+      { regex: /^\s*server_name\s+(.+)/im,                       label: 'SERVER_NAME', type: 'parameter' },
+
+      // ─── Directories / Pfade ────────────────────────────────
+      { regex: /^\s*DocumentRoot\s+["']?([^\s"'#]+)/im,          label: 'DOCROOT',     type: 'directory' },
+      { regex: /^\s*ServerRoot\s+["']?([^\s"'#]+)/im,            label: 'SERVERROOT',  type: 'directory' },
+      { regex: /^\s*data_directory\s*=\s*'?([^'#\n]+)/im,        label: 'DATADIR',     type: 'directory' },
+      { regex: /^\s*cache_dir\s+(.+)/im,                         label: 'CACHE_DIR',   type: 'directory' },
+      { regex: /^\s*coredump_dir\s+(.+)/im,                      label: 'COREDIR',     type: 'directory' },
+      { regex: /^\s*root\s+(.+);/im,                             label: 'ROOT',        type: 'directory' },
+
+      // ─── Includes ──────────────────────────────────────────
+      { regex: /^\s*(?:IncludeOptional|Include)\s+(.+)/im,       label: 'INCLUDE',     type: 'include' },
+      { regex: /^\s*include\s+(.+);/im,                          label: 'INCLUDE',     type: 'include' },
+
+      // ─── Logs ───────────────────────────────────────────────
+      { regex: /^\s*ErrorLog\s+(.+)/im,                          label: 'LOG',         type: 'log' },
+      { regex: /^\s*(?:CustomLog|TransferLog)\s+(.+)/im,         label: 'LOG',         type: 'log' },
+      { regex: /^\s*access_log\s+(.+)/im,                        label: 'LOG',         type: 'log' },
+      { regex: /^\s*error_log\s+(.+)/im,                         label: 'LOG',         type: 'log' },
+      { regex: /^\s*log_directory\s*=\s*'?([^'#\n]+)/im,         label: 'LOG',         type: 'log' },
+
+      // ─── Proxy / Upstream ──────────────────────────────────
+      { regex: /^\s*proxy_pass\s+(.+);/im,                       label: 'PROXY',       type: 'upstream' },
+      { regex: /^\s*ProxyPass\s+(.+)/im,                         label: 'PROXY',       type: 'upstream' },
+      { regex: /^\s*cache_peer\s+(.+)/im,                        label: 'CACHE_PEER',  type: 'upstream' },
+
+      // ─── ACLs (Squid etc.) ─────────────────────────────────
+      { regex: /^\s*acl\s+(\S+\s+\S+\s+.+)/im,                  label: 'ACL',         type: 'acl' },
+      { regex: /^\s*http_access\s+(.+)/im,                       label: 'ACCESS',      type: 'parameter' },
+
+      // ─── Auth / Security ──────────────────────────────────
+      { regex: /^\s*PermitRootLogin\s+(.+)/im,                   label: 'SSH',         type: 'parameter' },
+      { regex: /^\s*PasswordAuthentication\s+(.+)/im,            label: 'SSH',         type: 'parameter' },
+      { regex: /^\s*MaxAuthTries\s+(.+)/im,                      label: 'SSH',         type: 'parameter' },
+      { regex: /^\s*max_connections\s*=\s*(.+)/im,               label: 'MAXCONN',     type: 'parameter' },
+
+      // ─── Database ──────────────────────────────────────────
+      { regex: /^\s*shared_buffers\s*=\s*(.+)/im,                label: 'DB',          type: 'parameter' },
+      { regex: /^\s*cache_mem\s+(.+)/im,                         label: 'CACHE',       type: 'parameter' },
+
+      // ─── Docker ────────────────────────────────────────────
+      { regex: /^\s*"data-root"\s*:\s*"([^"]+)"/im,              label: 'DATAROOT',    type: 'directory' },
+    ];
+
+    for (const { path, content } of configs) {
+      const filename = path.split('/').pop() || path;
+      const lines = content.split('\n');
+
+      // Multiline-Patterns mit vollständigem Content
+      for (const pattern of PATTERNS) {
+        // Global suchen – alle Vorkommen
+        const globalRegex = new RegExp(pattern.regex.source, 'gim');
+        let match: RegExpExecArray | null;
+        while ((match = globalRegex.exec(content)) !== null) {
+          const value = match[1]?.trim();
+          if (value && value.length > 0 && value.length < 200) {
+            highlights.push(`📌 [${filename}] ${pattern.label}: ${value}`);
+          }
+        }
+      }
+
+      // Spezial: Zähle nicht-kommentierte, nicht-leere Zeilen für Kontext
+      const activeLines = lines.filter(l => {
+        const t = l.trim();
+        return t.length > 0 && !t.startsWith('#') && !t.startsWith(';') && !t.startsWith('//');
+      });
+
+      // Spezial: <Directory> Blöcke in Apache-Configs
+      const dirBlockRegex = /^\s*<Directory\s+["']?([^\s"'>]+)/gim;
+      let dirMatch: RegExpExecArray | null;
+      while ((dirMatch = dirBlockRegex.exec(content)) !== null) {
+        highlights.push(`📌 [${filename}] DIRECTORY_BLOCK: <Directory ${dirMatch[1]}>`);
+      }
+
+      // Spezial: <Location> Blöcke
+      const locBlockRegex = /^\s*<Location\s+["']?([^\s"'>]+)/gim;
+      let locMatch: RegExpExecArray | null;
+      while ((locMatch = locBlockRegex.exec(content)) !== null) {
+        highlights.push(`📌 [${filename}] LOCATION_BLOCK: <Location ${locMatch[1]}>`);
+      }
+
+      // Spezial: upstream{} Blöcke in Nginx
+      const upstreamRegex = /^\s*upstream\s+(\S+)\s*\{/gim;
+      let upMatch: RegExpExecArray | null;
+      while ((upMatch = upstreamRegex.exec(content)) !== null) {
+        highlights.push(`📌 [${filename}] UPSTREAM: ${upMatch[1]}`);
+      }
+
+      // Spezial: server{} Blöcke in Nginx (listen-Ports)
+      const serverBlockRegex = /^\s*listen\s+([^;]+);/gim;
+      let srvMatch: RegExpExecArray | null;
+      while ((srvMatch = serverBlockRegex.exec(content)) !== null) {
+        highlights.push(`📌 [${filename}] LISTEN: ${srvMatch[1].trim()}`);
+      }
+    }
+
+    // Deduplizieren
+    return [...new Set(highlights)];
   }
 
   // ── Analyse in DB speichern ───────────────────────────────────────────
