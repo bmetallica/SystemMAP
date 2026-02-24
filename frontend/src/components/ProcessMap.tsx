@@ -15,6 +15,7 @@ import ReactFlow, {
   MarkerType,
   Position,
   Handle,
+  NodeDragHandler,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -578,6 +579,25 @@ function addRadialChildren(
   });
 }
 
+// ─── Hilfsfunktion: Alle Nachkommen eines Knotens finden ─────────────────
+
+function getDescendantIds(nodeId: string, allEdges: Edge[]): string[] {
+  const childMap = new Map<string, string[]>();
+  allEdges.forEach(e => {
+    const arr = childMap.get(e.source) || [];
+    arr.push(e.target);
+    childMap.set(e.source, arr);
+  });
+  const result: string[] = [];
+  const queue = [...(childMap.get(nodeId) || [])];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    result.push(id);
+    queue.push(...(childMap.get(id) || []));
+  }
+  return result;
+}
+
 // ─── Hauptkomponente ─────────────────────────────────────────────────────
 
 interface ProcessMapProps {
@@ -655,13 +675,13 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
 
   // Klick auf Knoten: Toggle expand/collapse
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    if (node.id === 'host') {
+    if (node.type === 'hostNode') {
       setSelectedNode(null);
       return;
     }
 
     // Prozess-Knoten: Details anzeigen + expand toggle
-    if (node.id.startsWith('proc-')) {
+    if (node.type === 'processNode') {
       // Prozess-Daten für Detail-Panel
       const procData = node.data as ProcessTreeData & { hasChildren: boolean };
       setSelectedNode(procData);
@@ -690,7 +710,7 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
     }
 
     // Detail-Knoten: expand/collapse Kinder
-    if (node.data.hasChildren) {
+    if (node.type === 'detailNode' && node.data.hasChildren) {
       setExpandedDetails(prev => {
         const next = new Set(prev);
         if (next.has(node.id)) {
@@ -706,6 +726,46 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
       });
     }
   }, []);
+
+  // ─── Group-Drag: Kinder-Knoten mitverschieben ────────────────────────────
+
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    descendants: Map<string, { x: number; y: number }>;
+  } | null>(null);
+
+  const onNodeDragStart: NodeDragHandler = useCallback((_evt, node, allNodes) => {
+    const descIds = getDescendantIds(node.id, edges);
+    if (descIds.length === 0) {
+      dragRef.current = null;
+      return;
+    }
+    const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+    const descendants = new Map<string, { x: number; y: number }>();
+    descIds.forEach(id => {
+      const n = nodeMap.get(id);
+      if (n) descendants.set(id, { x: n.position.x, y: n.position.y });
+    });
+    dragRef.current = {
+      startX: node.position.x,
+      startY: node.position.y,
+      descendants,
+    };
+  }, [edges]);
+
+  const onNodeDrag: NodeDragHandler = useCallback((_evt, node) => {
+    if (!dragRef.current || dragRef.current.descendants.size === 0) return;
+    const dx = node.position.x - dragRef.current.startX;
+    const dy = node.position.y - dragRef.current.startY;
+    setNodes(nds => nds.map(n => {
+      const startPos = dragRef.current?.descendants.get(n.id);
+      if (startPos) {
+        return { ...n, position: { x: startPos.x + dx, y: startPos.y + dy } };
+      }
+      return n;
+    }));
+  }, [setNodes]);
 
   // Alle Prozesse auf-/zuklappen
   const toggleExpandAll = useCallback(() => {
@@ -809,6 +869,8 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={onNodeClick}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDrag={onNodeDrag}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.15 }}
