@@ -14,12 +14,15 @@ export default defineConfig({
         timeout: 120_000,      // 2 Min Proxy-Timeout (statt ~30s default)
         proxyTimeout: 120_000, // Backend-Antwort Timeout
         configure: (proxy) => {
-          proxy.on('error', (_err, _req, res) => {
-            // Bei Proxy-Fehler: 502 statt harten Abbruch
-            if (res && !res.headersSent) {
-              res.writeHead(502, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Backend nicht erreichbar – bitte warten…' }));
-            }
+          proxy.on('error', (err, _req, res) => {
+            console.warn('⚠️ Proxy-Fehler:', err.message);
+            // res kann ServerResponse ODER Socket sein (bei WS-Upgrade)
+            try {
+              if (res && 'writeHead' in res && typeof res.writeHead === 'function' && !res.headersSent) {
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Backend nicht erreichbar – bitte warten…' }));
+              }
+            } catch { /* ignore – connection already closed */ }
           });
         },
       },
@@ -27,7 +30,7 @@ export default defineConfig({
     // ─── HMR Reconnect bei instabiler Verbindung ──────────────────
     hmr: {
       overlay: false,       // Keine Fullscreen-Fehlermeldung bei HMR-Verlust
-      timeout: 120_000,     // 2 Min bis HMR-Verbindung als tot gilt
+      timeout: 30_000,      // 30s HMR-Timeout (Standard-nah, verhindert hängende Connections)
     },
   },
 });
