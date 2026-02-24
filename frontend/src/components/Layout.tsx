@@ -70,7 +70,7 @@ export default function Layout() {
         {/* Logo – immer sichtbar */}
         <div className="p-3 border-b border-gray-700 flex items-center gap-2 min-h-[56px]">
           <span className="text-2xl flex-shrink-0">🗺️</span>
-          <div className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
+          <div className="whitespace-nowrap overflow-hidden">
             <h1 className="text-lg font-bold text-white leading-tight">SystemMAP</h1>
             <p className="text-[10px] text-gray-400">Infrastructure Mapping</p>
           </div>
