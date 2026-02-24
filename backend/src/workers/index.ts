@@ -5,11 +5,17 @@ import { config, validateConfig } from '../config';
 import { startScanWorker } from './scan.worker';
 import { startNetworkScanWorker } from './network-discovery.worker';
 import { startProcessMapWorker } from './process-map.worker';
+import { aiService } from '../services/ai';
 import { logger } from '../logger';
 
 validateConfig();
 
 logger.info('🚀 SystemMAP Worker-Prozess wird gestartet...');
+
+// Stale Locks aufräumen beim Worker-Start (z.B. nach Crash/Restart)
+aiService.releaseLock().then(() => {
+  logger.info('🔓 KI-Lock bereinigt (Worker-Neustart)');
+}).catch(() => {});
 
 const scanWorker = startScanWorker();
 logger.info('✅ Server-Scan Worker aktiv (Concurrency: 3)');

@@ -1,0 +1,17 @@
+                                   Tabelle »public.ai_analyses«
+    Spalte    |              Typ               | Sortierfolge | NULL erlaubt? |    Vorgabewert    
+--------------+--------------------------------+--------------+---------------+-------------------
+ id           | text                           |              | not null      | 
+ server_id    | text                           |              | not null      | 
+ purpose      | text                           |              |               | 
+ tree_json    | jsonb                          |              |               | 
+ raw_prompt   | text                           |              |               | 
+ raw_response | text                           |              |               | 
+ model_used   | text                           |              |               | 
+ duration_ms  | integer                        |              |               | 
+ created_at   | timestamp(3) without time zone |              | not null      | CURRENT_TIMESTAMP
+Indexe:
+    "ai_analyses_pkey" PRIMARY KEY, btree (id)
+Fremdschlüssel-Constraints:
+    "ai_analyses_server_id_fkey" FOREIGN KEY (server_id) REFERENCES servers(id) ON UPDATE CASCADE ON DELETE CASCADE
+

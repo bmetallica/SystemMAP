@@ -114,6 +114,7 @@ export class AiService {
   /**
    * Erwirbt den exklusiven Lock für einen KI-Prozessmap-Scan.
    * Nur ein Scan kann gleichzeitig laufen (bei lokalen Providern).
+   * Stale Locks (> 45 min) werden automatisch aufgeräumt.
    */
   async acquireLock(serverId: string): Promise<boolean> {
     const settings = await this.getSettings();
@@ -129,8 +130,16 @@ export class AiService {
 
     // Bei lokalen Providern: prüfen ob schon ein Scan läuft
     if (settings.processMapRunning) {
-      logger.warn(`Lock-Anfrage abgelehnt: Map-Scan läuft bereits (Server ${settings.processMapServerId})`);
-      return false;
+      // Stale-Lock-Schutz: Wenn der Lock älter als 45 Minuten ist, gilt er als abgelaufen
+      const STALE_LOCK_MS = 45 * 60 * 1000; // 45 Minuten
+      const lockAge = Date.now() - settings.updatedAt.getTime();
+      if (lockAge > STALE_LOCK_MS) {
+        logger.warn(`⚠️ Stale Lock erkannt (${Math.round(lockAge / 60000)} min alt) – wird aufgeräumt`);
+        // Lock aufräumen und neu erwerben
+      } else {
+        logger.warn(`Lock-Anfrage abgelehnt: Map-Scan läuft bereits seit ${Math.round(lockAge / 60000)} min (Server ${settings.processMapServerId})`);
+        return false;
+      }
     }
 
     await prisma.aiSettings.update({

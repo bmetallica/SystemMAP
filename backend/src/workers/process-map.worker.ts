@@ -65,12 +65,6 @@ export function startProcessMapWorker(): Worker {
         keyEncrypted: server.sshKeyEncrypted || undefined,
       };
 
-      // Lock erwerben
-      const lockAcquired = await aiService.acquireLock(serverId);
-      if (!lockAcquired) {
-        throw new Error('KI-Lock konnte nicht erworben werden – ein anderer Map-Scan läuft bereits.');
-      }
-
       const overallStart = Date.now();
 
       // ── Kernel/System-Prozess-Filter (wird in mehreren Schritten verwendet) ──
@@ -89,7 +83,13 @@ export function startProcessMapWorker(): Worker {
         return false;
       }
 
+      // Lock erwerben (innerhalb try, damit finally korrekt aufräumt)
+      let lockAcquired = false;
       try {
+        lockAcquired = await aiService.acquireLock(serverId);
+        if (!lockAcquired) {
+          throw new Error('KI-Lock konnte nicht erworben werden – ein anderer Map-Scan läuft bereits.');
+        }
         // ═══════════════════════════════════════════════════════════════════
         // Schritt 1: Config-Discovery via SSH (0-20%)
         // ═══════════════════════════════════════════════════════════════════
@@ -357,8 +357,10 @@ export function startProcessMapWorker(): Worker {
         };
 
       } finally {
-        // Lock IMMER freigeben
-        await aiService.releaseLock();
+        // Lock NUR freigeben wenn wir ihn auch erworben haben
+        if (lockAcquired) {
+          await aiService.releaseLock();
+        }
       }
     },
     {
@@ -373,8 +375,6 @@ export function startProcessMapWorker(): Worker {
 
   worker.on('failed', (job, err) => {
     logger.error(`❌ Process-Map Job ${job?.id} fehlgeschlagen: ${err.message}`);
-    // Lock freigeben bei Fehler
-    aiService.releaseLock().catch(() => {});
   });
 
   return worker;
