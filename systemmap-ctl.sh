@@ -13,6 +13,11 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -uo pipefail
 
+# ─── Docker API Kompatibilität ───────────────────────────────────────────
+# Docker Compose v5.x nutzt API v1.53+, aber Docker Engine 20.10 unterstützt
+# nur bis API v1.41. Wir erzwingen die passende Version.
+export DOCKER_API_VERSION="${DOCKER_API_VERSION:-1.41}"
+
 # ─── Konfiguration ───────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -22,17 +27,13 @@ LOG_DIR="${SYSTEMMAP_LOG_DIR:-/var/log/systemmap}"
 
 BACKEND_PID="$PID_DIR/systemmap-backend.pid"
 WORKER_PID="$PID_DIR/systemmap-worker.pid"
-FRONTEND_PID="$PID_DIR/systemmap-frontend.pid"
 
 BACKEND_LOG="$LOG_DIR/backend.log"
 WORKER_LOG="$LOG_DIR/worker.log"
-FRONTEND_LOG="$LOG_DIR/frontend.log"
 
 TSX="$SCRIPT_DIR/backend/node_modules/.bin/tsx"
-VITE="$SCRIPT_DIR/frontend/node_modules/.bin/vite"
 
 BACKEND_PORT="${PORT:-3001}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 
 # ─── Hilfsfunktionen ─────────────────────────────────────────────────────
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
@@ -134,7 +135,7 @@ cmd_start() {
   ensure_dirs
 
   # ─── Alte Prozesse aufräumen ──────────────────────────────────────────
-  for pf in "$BACKEND_PID" "$WORKER_PID" "$FRONTEND_PID"; do
+  for pf in "$BACKEND_PID" "$WORKER_PID"; do
     if pid_alive "$pf"; then
       log "Vorheriger Prozess noch aktiv – wird gestoppt"
       kill_pid "$pf" "$(basename "$pf")"
@@ -156,15 +157,6 @@ cmd_start() {
   echo $! > "$WORKER_PID"
   log "Worker gestartet (PID $(cat "$WORKER_PID"))"
 
-  # ─── Frontend starten ────────────────────────────────────────────────
-  log "Starte Frontend..."
-  cd "$SCRIPT_DIR/frontend"
-  nohup "$VITE" --host 0.0.0.0 >> "$FRONTEND_LOG" 2>&1 &
-  echo $! > "$FRONTEND_PID"
-  log "Frontend gestartet (PID $(cat "$FRONTEND_PID"))"
-
-  wait_for_port "$FRONTEND_PORT" "Frontend" 15 || true
-
   # ─── Health-Check ────────────────────────────────────────────────────
   sleep 2
   if curl -sf "http://localhost:${BACKEND_PORT}/api/health" >/dev/null 2>&1; then
@@ -174,8 +166,8 @@ cmd_start() {
   fi
 
   log "Alle Dienste gestartet"
-  log "  Frontend:  http://localhost:${FRONTEND_PORT}"
-  log "  Backend:   http://localhost:${BACKEND_PORT}/api"
+  log "  App:       http://localhost:${BACKEND_PORT}"
+  log "  API:       http://localhost:${BACKEND_PORT}/api"
   log "  Logs:      $LOG_DIR/"
 }
 
@@ -185,7 +177,6 @@ cmd_start() {
 cmd_stop() {
   log "Stoppe SystemMAP-Dienste..."
 
-  kill_pid "$FRONTEND_PID" "Frontend"
   kill_pid "$WORKER_PID"   "Worker"
   kill_pid "$BACKEND_PID"  "Backend"
 
@@ -256,13 +247,6 @@ cmd_status() {
     echo "║ Worker:    ✅ Aktiv (PID $(cat "$WORKER_PID"))"
   else
     echo "║ Worker:    ❌ Nicht aktiv"
-  fi
-
-  # Frontend
-  if pid_alive "$FRONTEND_PID"; then
-    echo "║ Frontend:  ✅ Aktiv (PID $(cat "$FRONTEND_PID"), Port $FRONTEND_PORT)"
-  else
-    echo "║ Frontend:  ❌ Nicht aktiv"
   fi
 
   # API Health
