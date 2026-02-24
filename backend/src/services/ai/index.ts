@@ -1095,30 +1095,78 @@ Antworte NUR als JSON:
 
 ${configsMd}${discoverySection}
 
-WICHTIG: Erstelle eine **lineare Kette** von Knoten, die den Informationsfluss abbildet.
+WICHTIG: Erstelle einen **mehrstufigen Baum**, der die echte Konfigurationsstruktur des Dienstes abbildet.
 Jeder Knoten hat:
-- "name": Bezeichnung (z.B. "Listen-Port", "Document-Root", "Upstream-Server")
+- "name": Bezeichnung (z.B. Dateiname, Parameter-Name, VHost-Name)
 - "type": Knotentyp – einer von: "config_file", "port", "path", "directory", "vhost", "upstream", "connection", "volume", "parameter", "user", "module", "database", "log"
 - "value": Konkreter Wert (z.B. "80", "/var/www/html", "/etc/nginx/nginx.conf")
-- "children": Weitere Detail-Knoten (optional, maximal 1 Ebene tief)
+- "children": Array von Kind-Knoten (beliebig tief verschachtelt!)
 
-Die Struktur soll einen **Baum** ergeben, bei dem jeder Detail-Knoten als eigener visueller Knoten dargestellt wird.
-Gruppiere NICHT nach abstrakten Kategorien wie "Netzwerk" oder "Storage", sondern bilde die **reale Konfigurationsstruktur** ab.
+REGELN:
+1. Bilde die **tatsächliche Datei-Include-Struktur** ab. Apache hat z.B. apache2.conf, die sites-enabled/*.conf einbindet. Jede eingebundene Datei wird ein eigener Kindknoten.
+2. Jede Config-Datei die du in den Eingabedaten siehst, muss als eigener Knoten mit type="config_file" erscheinen.
+3. Unter jeder Config-Datei hängen deren Inhalte: VHosts, Ports, Directories, Module etc.
+4. Ordne Informationen der RICHTIGEN Datei zu! DocumentRoot aus sites-enabled/000-default.conf gehört unter diese Datei, NICHT unter apache2.conf.
+5. Verschachtelung ist erlaubt und erwünscht: config_file → vhost → directory → parameter
 
 Beispiel für Apache2:
-- Hauptconfig → /etc/apache2/apache2.conf
-  - VHost → default (Port 80) → Document-Root /var/www/html
-  - VHost → ssl-site (Port 443) → Document-Root /var/www/secure → SSL-Cert /etc/ssl/...
-  - Modul → mod_rewrite
-  - Modul → mod_ssl
-  - Log → /var/log/apache2/access.log
+{
+  "children": [
+    {
+      "name": "apache2.conf", "type": "config_file", "value": "/etc/apache2/apache2.conf",
+      "children": [
+        { "name": "ServerRoot", "type": "directory", "value": "/etc/apache2" },
+        { "name": "ErrorLog", "type": "log", "value": "/var/log/apache2/error.log" },
+        { "name": "Timeout", "type": "parameter", "value": "300" }
+      ]
+    },
+    {
+      "name": "ports.conf", "type": "config_file", "value": "/etc/apache2/ports.conf",
+      "children": [
+        { "name": "Listen", "type": "port", "value": "80" },
+        { "name": "Listen HTTPS", "type": "port", "value": "443" }
+      ]
+    },
+    {
+      "name": "000-default.conf", "type": "config_file", "value": "/etc/apache2/sites-enabled/000-default.conf",
+      "children": [
+        {
+          "name": "VHost *:80", "type": "vhost", "value": "*:80",
+          "children": [
+            { "name": "DocumentRoot", "type": "directory", "value": "/var/www/html" },
+            { "name": "ServerAdmin", "type": "parameter", "value": "webmaster@localhost" },
+            { "name": "AccessLog", "type": "log", "value": "/var/log/apache2/access.log" }
+          ]
+        }
+      ]
+    },
+    { "name": "mod_rewrite", "type": "module", "value": "enabled" },
+    { "name": "mod_ssl", "type": "module", "value": "enabled" }
+  ]
+}
 
 Beispiel für PostgreSQL:
-- Hauptconfig → /etc/postgresql/16/main/postgresql.conf
-  - Listen → Port 5432 → Bind 127.0.0.1
-  - Datenbank → mydb
-  - Log → /var/log/postgresql/postgresql-16-main.log
-  - HBA → /etc/postgresql/16/main/pg_hba.conf → local trust → host md5
+{
+  "children": [
+    {
+      "name": "postgresql.conf", "type": "config_file", "value": "/etc/postgresql/16/main/postgresql.conf",
+      "children": [
+        { "name": "listen_addresses", "type": "parameter", "value": "localhost" },
+        { "name": "port", "type": "port", "value": "5432" },
+        { "name": "max_connections", "type": "parameter", "value": "100" },
+        { "name": "data_directory", "type": "directory", "value": "/var/lib/postgresql/16/main" },
+        { "name": "log_directory", "type": "log", "value": "/var/log/postgresql" }
+      ]
+    },
+    {
+      "name": "pg_hba.conf", "type": "config_file", "value": "/etc/postgresql/16/main/pg_hba.conf",
+      "children": [
+        { "name": "local all all", "type": "parameter", "value": "peer" },
+        { "name": "host all all 127.0.0.1/32", "type": "parameter", "value": "md5" }
+      ]
+    }
+  ]
+}
 
 Antworte NUR als JSON:
 {
@@ -1126,18 +1174,7 @@ Antworte NUR als JSON:
   "executable": "${executable}",
   "service_type": "Typ des Dienstes (z.B. Webserver, Datenbank, Proxy, Container Runtime)",
   "description": "Kurze Beschreibung was der Dienst tut (1 Satz)",
-  "children": [
-    {
-      "name": "Hauptconfig",
-      "type": "config_file",
-      "value": "/etc/example/main.conf",
-      "children": [
-        { "name": "Listen-Port", "type": "port", "value": "8080" },
-        { "name": "Document-Root", "type": "directory", "value": "/var/www/html" },
-        { "name": "Access-Log", "type": "log", "value": "/var/log/example/access.log" }
-      ]
-    }
-  ]
+  "children": [ ... wie oben beschrieben ... ]
 }`;
 
     const { data, response } = await this.chatJson<ProcessTreeResult>(prompt, {

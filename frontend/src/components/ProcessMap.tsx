@@ -15,6 +15,7 @@ import ReactFlow, {
   MarkerType,
   Position,
   Handle,
+  NodeChange,
   NodeDragHandler,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -768,49 +769,69 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
     }
   }, []);
 
-  // ─── Group-Drag: Kinder-Knoten mitverschieben ────────────────────────────
+  // ─── Group-Drag: Kinder-Knoten mitverschieben via onNodesChange ─────────
 
   const dragRef = useRef<{
-    startX: number;
-    startY: number;
-    descendants: Map<string, { x: number; y: number }>;
+    nodeId: string;
+    lastX: number;
+    lastY: number;
   } | null>(null);
 
-  const onNodeDragStart: NodeDragHandler = useCallback((_evt, node, allNodes) => {
-    // Nachkommen über ID-Hierarchie finden (proc-5-c0 ist Kind von proc-5)
-    const prefix = node.id + '-';
-    const descs = allNodes.filter(n => n.id.startsWith(prefix));
-    if (descs.length === 0) {
-      dragRef.current = null;
-      return;
-    }
-    const descendants = new Map<string, { x: number; y: number }>();
-    descs.forEach(n => descendants.set(n.id, { x: n.position.x, y: n.position.y }));
+  const onNodeDragStart: NodeDragHandler = useCallback((_evt, node) => {
     dragRef.current = {
-      startX: node.position.x,
-      startY: node.position.y,
-      descendants,
+      nodeId: node.id,
+      lastX: node.position.x,
+      lastY: node.position.y,
     };
   }, []);
 
-  const onNodeDrag: NodeDragHandler = useCallback((_evt, node) => {
-    // Position des gezogenen Knotens immer speichern
-    posOverrides.current.set(node.id, { ...node.position });
+  // Custom onNodesChange: Fängt Position-Änderungen ab und verschiebt Nachkommen mit
+  const customOnNodesChange = useCallback((changes: NodeChange[]) => {
+    // Drag-Position abfangen und Nachkommen mitverschieben
+    if (dragRef.current) {
+      const dragId = dragRef.current.nodeId;
+      const prefix = dragId + '-';
 
-    // Nachkommen mitverschieben
-    if (!dragRef.current || dragRef.current.descendants.size === 0) return;
-    const dx = node.position.x - dragRef.current.startX;
-    const dy = node.position.y - dragRef.current.startY;
-    setNodes(nds => nds.map(n => {
-      const startPos = dragRef.current?.descendants.get(n.id);
-      if (startPos) {
-        const newPos = { x: startPos.x + dx, y: startPos.y + dy };
-        posOverrides.current.set(n.id, newPos);
-        return { ...n, position: newPos };
+      // Position-Change des gezogenen Knotens finden
+      const dragChange = changes.find(
+        c => c.type === 'position' && c.id === dragId && c.position
+      );
+
+      if (dragChange && dragChange.type === 'position' && dragChange.position) {
+        const dx = dragChange.position.x - dragRef.current.lastX;
+        const dy = dragChange.position.y - dragRef.current.lastY;
+
+        if (dx !== 0 || dy !== 0) {
+          dragRef.current.lastX = dragChange.position.x;
+          dragRef.current.lastY = dragChange.position.y;
+
+          // Position des gezogenen Knotens speichern
+          posOverrides.current.set(dragId, { ...dragChange.position });
+
+          // Nachkommen-Positionen in einem setNodes-Batch aktualisieren
+          setNodes(nds => nds.map(n => {
+            if (n.id.startsWith(prefix)) {
+              const newPos = { x: n.position.x + dx, y: n.position.y + dy };
+              posOverrides.current.set(n.id, newPos);
+              return { ...n, position: newPos };
+            }
+            return n;
+          }));
+        }
       }
-      return n;
-    }));
-  }, [setNodes]);
+
+      // Drag-Ende erkennen
+      const dragEndChange = changes.find(
+        c => c.type === 'position' && c.id === dragId && c.dragging === false
+      );
+      if (dragEndChange) {
+        dragRef.current = null;
+      }
+    }
+
+    // Alle Changes normal anwenden (inkl. dem gezogenen Knoten)
+    onNodesChange(changes);
+  }, [onNodesChange, setNodes]);
 
   // Alle Prozesse auf-/zuklappen
   const toggleExpandAll = useCallback(() => {
@@ -911,11 +932,10 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
         <ReactFlow
           nodes={nodes}
           edges={edges}
-          onNodesChange={onNodesChange}
+          onNodesChange={customOnNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeClick={onNodeClick}
           onNodeDragStart={onNodeDragStart}
-          onNodeDrag={onNodeDrag}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.15 }}
