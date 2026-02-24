@@ -579,23 +579,16 @@ function addRadialChildren(
   });
 }
 
-// ─── Hilfsfunktion: Alle Nachkommen eines Knotens finden ─────────────────
+// ─── Hilfsfunktion: Parent-Knoten-ID ermitteln (ID-Hierarchie) ───────────
 
-function getDescendantIds(nodeId: string, allEdges: Edge[]): string[] {
-  const childMap = new Map<string, string[]>();
-  allEdges.forEach(e => {
-    const arr = childMap.get(e.source) || [];
-    arr.push(e.target);
-    childMap.set(e.source, arr);
-  });
-  const result: string[] = [];
-  const queue = [...(childMap.get(nodeId) || [])];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    result.push(id);
-    queue.push(...(childMap.get(id) || []));
-  }
-  return result;
+function getParentNodeId(nodeId: string): string | null {
+  if (nodeId === 'host') return null;
+  // proc-5-c0-c1 → proc-5-c0 (letztes -cN entfernen)
+  const match = nodeId.match(/^(.+)-c\d+$/);
+  if (match) return match[1];
+  // proc-5 → host
+  if (nodeId.startsWith('proc-')) return 'host';
+  return null;
 }
 
 // ─── Hauptkomponente ─────────────────────────────────────────────────────
@@ -658,6 +651,9 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
     return counts;
   }, [data]);
 
+  // Position-Overrides: Speichert manuell verschobene Knoten-Positionen
+  const posOverrides = useRef(new Map<string, { x: number; y: number }>());
+
   // Layout berechnen (re-calculated wenn expand-state oder filter sich ändert)
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(
     () => calculateRadialLayout(filtered, hostname, expandedProcs, expandedDetails),
@@ -667,9 +663,54 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutEdges);
 
-  // Update nodes/edges wenn sich Layout ändert
+  // Update nodes/edges wenn sich Layout ändert – Position-Overrides beibehalten
   useEffect(() => {
-    setNodes(layoutNodes);
+    const overrides = posOverrides.current;
+    const layoutMap = new Map(layoutNodes.map(n => [n.id, n]));
+    const newIds = new Set(layoutNodes.map(n => n.id));
+
+    // Delta berechnen für jeden verschobenen Knoten
+    const deltaCache = new Map<string, { dx: number; dy: number }>();
+    for (const [id, pos] of overrides) {
+      const layoutNode = layoutMap.get(id);
+      if (layoutNode) {
+        deltaCache.set(id, {
+          dx: pos.x - layoutNode.position.x,
+          dy: pos.y - layoutNode.position.y,
+        });
+      }
+    }
+
+    // Nächsten verschobenen Vorfahren finden
+    function getAncestorDelta(nodeId: string): { dx: number; dy: number } {
+      let id: string | null = nodeId;
+      while (id) {
+        const d = deltaCache.get(id);
+        if (d) return d;
+        id = getParentNodeId(id);
+      }
+      return { dx: 0, dy: 0 };
+    }
+
+    const mergedNodes = layoutNodes.map(n => {
+      // Knoten hat eigene Position-Override → verwenden
+      const override = overrides.get(n.id);
+      if (override) return { ...n, position: override };
+
+      // Kein Override, aber Vorfahre verschoben → Delta übertragen
+      const delta = getAncestorDelta(n.id);
+      if (delta.dx !== 0 || delta.dy !== 0) {
+        return { ...n, position: { x: n.position.x + delta.dx, y: n.position.y + delta.dy } };
+      }
+      return n;
+    });
+
+    // Overrides für entfernte Knoten bereinigen
+    for (const key of overrides.keys()) {
+      if (!newIds.has(key)) overrides.delete(key);
+    }
+
+    setNodes(mergedNodes);
     setEdges(layoutEdges);
   }, [layoutNodes, layoutEdges]);
 
@@ -736,32 +777,36 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
   } | null>(null);
 
   const onNodeDragStart: NodeDragHandler = useCallback((_evt, node, allNodes) => {
-    const descIds = getDescendantIds(node.id, edges);
-    if (descIds.length === 0) {
+    // Nachkommen über ID-Hierarchie finden (proc-5-c0 ist Kind von proc-5)
+    const prefix = node.id + '-';
+    const descs = allNodes.filter(n => n.id.startsWith(prefix));
+    if (descs.length === 0) {
       dragRef.current = null;
       return;
     }
-    const nodeMap = new Map(allNodes.map(n => [n.id, n]));
     const descendants = new Map<string, { x: number; y: number }>();
-    descIds.forEach(id => {
-      const n = nodeMap.get(id);
-      if (n) descendants.set(id, { x: n.position.x, y: n.position.y });
-    });
+    descs.forEach(n => descendants.set(n.id, { x: n.position.x, y: n.position.y }));
     dragRef.current = {
       startX: node.position.x,
       startY: node.position.y,
       descendants,
     };
-  }, [edges]);
+  }, []);
 
   const onNodeDrag: NodeDragHandler = useCallback((_evt, node) => {
+    // Position des gezogenen Knotens immer speichern
+    posOverrides.current.set(node.id, { ...node.position });
+
+    // Nachkommen mitverschieben
     if (!dragRef.current || dragRef.current.descendants.size === 0) return;
     const dx = node.position.x - dragRef.current.startX;
     const dy = node.position.y - dragRef.current.startY;
     setNodes(nds => nds.map(n => {
       const startPos = dragRef.current?.descendants.get(n.id);
       if (startPos) {
-        return { ...n, position: { x: startPos.x + dx, y: startPos.y + dy } };
+        const newPos = { x: startPos.x + dx, y: startPos.y + dy };
+        posOverrides.current.set(n.id, newPos);
+        return { ...n, position: newPos };
       }
       return n;
     }));

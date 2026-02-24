@@ -79,9 +79,9 @@ export default function ServerDetail() {
     { key: 'ssl', label: `SSL (${server.sslCertificates?.length || 0})`, icon: '🔒' },
     { key: 'users', label: `Benutzer (${server.userAccounts?.length || 0})`, icon: '👤' },
     { key: 'connections', label: 'Verbindungen', icon: '🔗' },
-    { key: 'processmap', label: '🗺️ Prozessmap', icon: '🗺️' },
-    { key: 'runbook', label: '📋 Runbook', icon: '📋' },
-    { key: 'healthlogs', label: '🏥 Health & Logs', icon: '🏥' },
+    { key: 'processmap', label: '🗺️ Prozessmap', icon: '' },
+    { key: 'runbook', label: ' Runbook', icon: '📋' },
+    { key: 'healthlogs', label: ' Health & Logs', icon: '🏥' },
   ];
 
   return (
