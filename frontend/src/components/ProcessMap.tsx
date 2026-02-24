@@ -1,6 +1,7 @@
-// ─── ProcessMap – Visuelle Prozess-Karte als Baum (ReactFlow + dagre) ────
-// Phase 6: Hierarchischer Baum: Host → Prozess → Config-Dateien → Details
+// ─── ProcessMap – Visuelle Prozess-Karte (ReactFlow, Radial-Layout) ──────
+// Phase 6: Kreisförmige Anordnung: Host → Prozesse → Config-Dateien → Details
 // Jeder Konfig-Eintrag ist ein eigener visueller Knoten im Graph
+// Kinder werden kreisförmig um den übergeordneten Knoten angeordnet
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import ReactFlow, {
@@ -15,7 +16,6 @@ import ReactFlow, {
   Position,
   Handle,
 } from 'reactflow';
-import dagre from 'dagre';
 import 'reactflow/dist/style.css';
 
 // ─── Typen ───────────────────────────────────────────────────────────────
@@ -200,8 +200,14 @@ function ProcessNode({ data }: { data: any }) {
         boxShadow: `0 0 16px ${colors.border}44`,
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: colors.border, width: 8, height: 8 }} />
-      <Handle type="source" position={Position.Bottom} style={{ background: colors.border, width: 8, height: 8 }} />
+      <Handle type="target" position={Position.Top} id="t-top" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="target" position={Position.Right} id="t-right" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="target" position={Position.Bottom} id="t-bottom" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="target" position={Position.Left} id="t-left" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Top} id="s-top" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Right} id="s-right" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Left} id="s-left" style={{ background: colors.border, width: 5, height: 5, opacity: 0.5 }} />
 
       {/* Header */}
       <div className="flex items-center gap-2 mb-1">
@@ -274,8 +280,14 @@ function DetailNode({ data }: { data: any }) {
         boxShadow: `0 0 8px ${style.border}22`,
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: style.border, width: 6, height: 6 }} />
-      <Handle type="source" position={Position.Bottom} style={{ background: style.border, width: 6, height: 6 }} />
+      <Handle type="target" position={Position.Top} id="t-top" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="target" position={Position.Right} id="t-right" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="target" position={Position.Bottom} id="t-bottom" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="target" position={Position.Left} id="t-left" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="source" position={Position.Top} id="s-top" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="source" position={Position.Right} id="s-right" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
+      <Handle type="source" position={Position.Left} id="s-left" style={{ background: style.border, width: 4, height: 4, opacity: 0.4 }} />
 
       <div className="flex items-center gap-1.5">
         <span className="text-sm flex-shrink-0">{style.icon}</span>
@@ -320,7 +332,10 @@ function HostNode({ data }: { data: any }) {
         boxShadow: '0 0 30px #3b82f633, 0 0 60px #3b82f611',
       }}
     >
-      <Handle type="source" position={Position.Bottom} style={{ background: '#3b82f6', width: 8, height: 8, bottom: -4 }} />
+      <Handle type="source" position={Position.Top} id="s-top" style={{ background: '#3b82f6', width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Right} id="s-right" style={{ background: '#3b82f6', width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Bottom} id="s-bottom" style={{ background: '#3b82f6', width: 5, height: 5, opacity: 0.5 }} />
+      <Handle type="source" position={Position.Left} id="s-left" style={{ background: '#3b82f6', width: 5, height: 5, opacity: 0.5 }} />
 
       <span className="text-2xl mb-1">🖥️</span>
       <strong className="text-xs text-center leading-tight">{data.hostname}</strong>
@@ -350,9 +365,47 @@ function countChildren(node: TreeNode): number {
   return count;
 }
 
-// ─── Layout-Berechnung: Hierarchischer Baum mit dagre ────────────────────
+// ─── Handle-Richtung berechnen (für Radial-Edges) ───────────────────────
 
-function calculateTreeLayout(
+function getBestHandles(
+  parentCenter: { x: number; y: number },
+  childCenter: { x: number; y: number },
+): { sourceHandle: string; targetHandle: string } {
+  const dx = childCenter.x - parentCenter.x;
+  const dy = childCenter.y - parentCenter.y;
+  const angle = Math.atan2(dy, dx);
+
+  let sourceHandle: string;
+  let targetHandle: string;
+
+  if (angle >= -Math.PI / 4 && angle < Math.PI / 4) {
+    sourceHandle = 's-right';
+    targetHandle = 't-left';
+  } else if (angle >= Math.PI / 4 && angle < (3 * Math.PI) / 4) {
+    sourceHandle = 's-bottom';
+    targetHandle = 't-top';
+  } else if (angle >= (-3 * Math.PI) / 4 && angle < -Math.PI / 4) {
+    sourceHandle = 's-top';
+    targetHandle = 't-bottom';
+  } else {
+    sourceHandle = 's-left';
+    targetHandle = 't-right';
+  }
+
+  return { sourceHandle, targetHandle };
+}
+
+// ─── Radius für kreisförmige Anordnung berechnen ─────────────────────────
+
+function calcRadius(count: number, nodeSize: number, minRadius: number): number {
+  if (count <= 1) return minRadius;
+  // Genug Platz lassen, damit sich Knoten nicht überlappen
+  return Math.max(minRadius, (nodeSize + 20) / (2 * Math.sin(Math.PI / count)) + 30);
+}
+
+// ─── Layout-Berechnung: Kreisförmig / Radial ─────────────────────────────
+
+function calculateRadialLayout(
   processes: ProcessTreeData[],
   hostname: string,
   expandedProcs: Set<string>,
@@ -360,29 +413,32 @@ function calculateTreeLayout(
 ) {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
+  const centers = new Map<string, { x: number; y: number }>();
 
-  // dagre Graph erstellen – TB = Top-to-Bottom
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 80, edgesep: 20 });
-  g.setDefaultEdgeLabel(() => ({}));
-
-  // Host-Knoten
+  // Host-Knoten in der Mitte
   const hostId = 'host';
-  g.setNode(hostId, { width: 120, height: 120 });
+  const hostW = 120, hostH = 120;
+  const hostCx = 0, hostCy = 0;
+  centers.set(hostId, { x: hostCx, y: hostCy });
+
   nodes.push({
     id: hostId,
     type: 'hostNode',
-    position: { x: 0, y: 0 }, // wird von dagre gesetzt
+    position: { x: hostCx - hostW / 2, y: hostCy - hostH / 2 },
     data: { hostname, processCount: processes.length },
     draggable: true,
   });
 
-  // Prozesse sortieren
+  // Prozesse sortieren (wichtige zuerst)
   const sorted = [...processes].sort((a, b) => {
     const aScore = (a.ports?.length || 0) * 10 + (a.children?.length || 0);
     const bScore = (b.ports?.length || 0) * 10 + (b.children?.length || 0);
     return bScore - aScore;
   });
+
+  const procCount = sorted.length;
+  const procNodeW = 200, procNodeH = 80;
+  const procRadius = calcRadius(procCount, Math.max(procNodeW, procNodeH), 280);
 
   sorted.forEach((proc, i) => {
     const procId = `proc-${i}`;
@@ -390,12 +446,18 @@ function calculateTreeLayout(
     const isExpanded = expandedProcs.has(procId);
     const totalChildren = proc.children?.reduce((s, c) => s + 1 + countChildren(c), 0) || 0;
 
-    g.setNode(procId, { width: 200, height: 80 });
+    // Kreisförmig um den Host anordnen (Start oben, im Uhrzeigersinn)
+    const angle = procCount === 1
+      ? -Math.PI / 2
+      : (2 * Math.PI * i) / procCount - Math.PI / 2;
+    const cx = hostCx + procRadius * Math.cos(angle);
+    const cy = hostCy + procRadius * Math.sin(angle);
+    centers.set(procId, { x: cx, y: cy });
 
     nodes.push({
       id: procId,
       type: 'processNode',
-      position: { x: 0, y: 0 },
+      position: { x: cx - procNodeW / 2, y: cy - procNodeH / 2 },
       data: {
         ...proc,
         hasChildren: totalChildren > 0,
@@ -406,11 +468,14 @@ function calculateTreeLayout(
     });
 
     // Edge: Host → Prozess
-    g.setEdge(hostId, procId);
+    const handles = getBestHandles({ x: hostCx, y: hostCy }, { x: cx, y: cy });
     edges.push({
       id: `e-host-${procId}`,
       source: hostId,
       target: procId,
+      sourceHandle: handles.sourceHandle,
+      targetHandle: handles.targetHandle,
+      type: 'straight',
       animated: (proc.ports?.length || 0) > 0,
       style: {
         stroke: colors.border,
@@ -425,40 +490,31 @@ function calculateTreeLayout(
       },
     });
 
-    // Wenn expanded: Kinder als eigene Knoten hinzufügen (rekursiv)
+    // Wenn expanded: Kinder kreisförmig um den Prozess
     if (isExpanded && proc.children?.length > 0) {
-      addTreeChildren(proc.children, procId, colors.border, nodes, edges, g, expandedDetails);
-    }
-  });
-
-  // dagre Layout berechnen
-  dagre.layout(g);
-
-  // Positionen aus dagre übernehmen
-  nodes.forEach(node => {
-    const dagreNode = g.node(node.id);
-    if (dagreNode) {
-      node.position = {
-        x: dagreNode.x - (dagreNode.width || 0) / 2,
-        y: dagreNode.y - (dagreNode.height || 0) / 2,
-      };
+      addRadialChildren(proc.children, procId, { x: cx, y: cy }, colors.border, nodes, edges, centers, expandedDetails);
     }
   });
 
   return { nodes, edges };
 }
 
-// ─── Rekursiv Kinder-Knoten zum Graph hinzufügen ─────────────────────────
+// ─── Rekursiv Kinder-Knoten kreisförmig anordnen ─────────────────────────
 
-function addTreeChildren(
+function addRadialChildren(
   children: TreeNode[],
   parentId: string,
+  parentCenter: { x: number; y: number },
   parentColor: string,
   nodes: Node[],
   edges: Edge[],
-  g: dagre.graphlib.Graph,
+  centers: Map<string, { x: number; y: number }>,
   expandedDetails: Set<string>,
 ) {
+  const count = children.length;
+  const detailNodeW = 170, detailNodeH = 45;
+  const radius = calcRadius(count, Math.max(detailNodeW, detailNodeH), 170);
+
   children.forEach((child, j) => {
     const childId = `${parentId}-c${j}`;
     const style = getDetailStyle(child.type);
@@ -470,12 +526,18 @@ function addTreeChildren(
     const labelLen = Math.max(child.name.length, (child.value || '').length);
     const nodeWidth = Math.min(240, Math.max(130, labelLen * 7 + 40));
 
-    g.setNode(childId, { width: nodeWidth, height: hasChildren ? 50 : 40 });
+    // Kreisförmig um den Parent anordnen
+    const angle = count === 1
+      ? -Math.PI / 2
+      : (2 * Math.PI * j) / count - Math.PI / 2;
+    const cx = parentCenter.x + radius * Math.cos(angle);
+    const cy = parentCenter.y + radius * Math.sin(angle);
+    centers.set(childId, { x: cx, y: cy });
 
     nodes.push({
       id: childId,
       type: 'detailNode',
-      position: { x: 0, y: 0 },
+      position: { x: cx - nodeWidth / 2, y: cy - detailNodeH / 2 },
       data: {
         label: child.name,
         value: child.value || '',
@@ -488,11 +550,14 @@ function addTreeChildren(
     });
 
     // Edge: Parent → Kind
-    g.setEdge(parentId, childId);
+    const handles = getBestHandles(parentCenter, { x: cx, y: cy });
     edges.push({
       id: `e-${parentId}-${childId}`,
       source: parentId,
       target: childId,
+      sourceHandle: handles.sourceHandle,
+      targetHandle: handles.targetHandle,
+      type: 'straight',
       style: {
         stroke: style.border,
         strokeWidth: 1.5,
@@ -508,7 +573,7 @@ function addTreeChildren(
 
     // Rekursiv Kinder, wenn expanded
     if (isExpanded && child.children?.length) {
-      addTreeChildren(child.children, childId, style.border, nodes, edges, g, expandedDetails);
+      addRadialChildren(child.children, childId, { x: cx, y: cy }, style.border, nodes, edges, centers, expandedDetails);
     }
   });
 }
@@ -575,7 +640,7 @@ export default function ProcessMap({ data, hostname }: ProcessMapProps) {
 
   // Layout berechnen (re-calculated wenn expand-state oder filter sich ändert)
   const { nodes: layoutNodes, edges: layoutEdges } = useMemo(
-    () => calculateTreeLayout(filtered, hostname, expandedProcs, expandedDetails),
+    () => calculateRadialLayout(filtered, hostname, expandedProcs, expandedDetails),
     [filtered, hostname, expandedProcs, expandedDetails]
   );
 
