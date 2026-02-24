@@ -7,6 +7,8 @@
 
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import { config, validateConfig } from './config';
 import { selfTest } from './services/crypto.service';
 import { startScheduler } from './services/scheduler.service';
@@ -43,8 +45,8 @@ const app = express();
 // Middleware
 app.use(cors({
   origin: config.nodeEnv === 'development'
-    ? ['http://localhost:5173', 'http://localhost:3000']
-    : process.env.FRONTEND_URL || 'http://localhost:5173',
+    ? true  // Alle Origins in Dev erlauben
+    : process.env.FRONTEND_URL || true,
   credentials: true,
 }));
 app.use(express.json({ limit: '50mb' }));
@@ -82,10 +84,32 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// 404 Handler
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Route nicht gefunden' });
-});
+// ─── Frontend Static-Files (Production Build) ───────────────────────────
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  // Statische Assets mit langem Cache (Vite hashed filenames)
+  app.use(express.static(frontendDist, {
+    maxAge: '7d',
+    etag: true,
+    immutable: true,
+  }));
+
+  // SPA Fallback: Alle nicht-API-Routen → index.html
+  app.get('*', (req, res) => {
+    // API-Routen die nicht existieren → 404 JSON
+    if (req.path.startsWith('/api/')) {
+      return res.status(404).json({ error: 'Route nicht gefunden' });
+    }
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+  logger.info(`📦 Frontend wird aus ${frontendDist} ausgeliefert`);
+} else {
+  // Kein Frontend-Build vorhanden → nur API-404
+  app.use((_req, res) => {
+    res.status(404).json({ error: 'Route nicht gefunden' });
+  });
+  logger.warn('⚠️ Kein Frontend-Build gefunden – nur API verfügbar');
+}
 
 // Error Handler
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
