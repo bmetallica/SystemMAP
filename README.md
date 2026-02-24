@@ -170,7 +170,7 @@ Jedes Feature kann **einzeln** in den KI-Einstellungen aktiviert/deaktiviert wer
 | Feature | Beschreibung |
 |---------|-------------|
 | 📝 **Server-Zusammenfassung** | Automatische Beschreibung: Zweck, Rolle, Tags, Zusammenfassung. Ideal für Onboarding neuer Team-Mitglieder. |
-| 🗺️ **Prozess-Map** | Hierarchische Baumstruktur aller Prozesse mit Konfigurationsdateien. Erkennt **30+ Service-Typen** automatisch (Apache, Nginx, Docker, PostgreSQL, Redis, MongoDB, HAProxy, Grafana, Pi-hole u.v.m.). |
+| 🗺️ **Prozess-Map** | Hierarchische Baumstruktur aller Prozesse mit Konfigurationsdateien. Erkennt **30+ Service-Typen** automatisch (Apache, Nginx, Docker, PostgreSQL, Redis, MongoDB, HAProxy, Grafana, Pi-hole u.v.m.). **Config Pre-Parser** extrahiert Ports, VHosts, Includes, ACLs und Verzeichnisse mit 30+ Regex-Patterns vor der KI-Analyse. |
 | 🔍 **Anomalie-Erkennung** | Bewertet Diff-Events als normal/verdächtig/kritisch. Erstellt automatisch Alerts bei Sicherheits-Anomalien. |
 | 💬 **NLP-Chat** | Freier KI-Chat über die Infrastruktur mit Server-Kontext (Docker, Services, Systemd, SSL). 6 Vorschlags-Prompts. |
 | 📋 **Auto-Runbooks** | Generiert Wartungsanleitungen mit konkreten Shell-Befehlen. Deckt Sicherheit, Updates, Monitoring, Backup und Performance ab. |
@@ -224,16 +224,15 @@ Jeder Server hat eine detaillierte Ansicht mit 14 Tabs:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Frontend                                  │
-│        React 18 · Vite 5 · TailwindCSS 3 · React Flow            │
-│        Port 5173 (Dev) / Nginx (Prod)                             │
-│        14 Seiten · Dark-Mode · Responsive                         │
-└──────────────────────────┬───────────────────────────────────────┘
-                           │ REST API (/api)
-┌──────────────────────────▼───────────────────────────────────────┐
-│                         Backend                                   │
-│        Express · Prisma ORM · BullMQ · node-cron · ssh2           │
-│        Port 3001 · TypeScript · JWT Auth                          │
+│                   Frontend + Backend (Port 3001)                  │
+│                                                                   │
+│   Frontend:  React 18 · Vite 5 (Build) · TailwindCSS 3 · React Flow  │
+│              Ausgeliefert als statische Dateien via Express       │
+│              14 Seiten · Dark-Mode · Responsive                   │
+│              Auto-Collapsing Sidebar · Axios Retry (3×)           │
+│                                                                   │
+│   Backend:   Express · Prisma ORM · BullMQ · node-cron · ssh2    │
+│              TypeScript · JWT Auth · Static File Serving          │
 ├───────────┬───────────┬───────────┬───────────┬─────────────────┤
 │ PostgreSQL│   Redis   │  SSH →    │   Nmap    │ KI-Provider     │
 │    16     │     7     │  Ziel-    │  Netzwerk │ Ollama/OpenAI/  │
@@ -246,10 +245,10 @@ Jeder Server hat eine detaillierte Ansicht mit 14 Tabs:
 
 | Schicht | Technologien |
 |---------|-------------|
-| **Frontend** | React 18, Vite 5, TailwindCSS 3, React Flow, Zustand, Axios |
-| **Backend** | Express, TypeScript, Prisma ORM, BullMQ, node-cron, ssh2, node-fetch |
+| **Frontend** | React 18, Vite 5 (Build-only), TailwindCSS 3, React Flow, Zustand, Axios (3× Retry, Exponential Backoff) |
+| **Backend** | Express (API + Static File Serving), TypeScript, Prisma ORM, BullMQ, node-cron, ssh2, node-fetch |
 | **Datenbank** | PostgreSQL 16 (21 Modelle), Redis 7 (Job-Queue) |
-| **Infrastruktur** | Docker Compose, Systemd-Service, Nginx (Prod) |
+| **Infrastruktur** | Docker Compose, Systemd-Service (Type=oneshot) |
 | **KI** | 7 Provider (Ollama, llama.cpp, OpenAI, Gemini, Claude, GitHub Copilot, Custom) |
 
 ### Datenbankschema – 21 Modelle
@@ -300,9 +299,11 @@ Nach Abschluss:
 
 | Dienst | URL |
 |--------|-----|
-| **Frontend** | http://localhost:5173 |
-| **Backend API** | http://localhost:3001/api |
+| **Web-Oberfläche** | http://localhost:3001 |
+| **API** | http://localhost:3001/api |
 | **Login** | `admin` / `admin1234` |
+
+> 💡 Frontend und API laufen auf dem **gleichen Port 3001**. Das Backend liefert die statisch gebauten Frontend-Dateien direkt aus – kein separater Dev-Server nötig.
 
 > ⚠️ **Passwort sofort nach dem ersten Login ändern!**
 
@@ -343,12 +344,13 @@ tail -f /var/log/systemmap/*.log
 | Eigenschaft | Wert |
 |-------------|------|
 | **Service-Name** | `systemmap.service` |
-| **Typ** | `forking` (Hintergrund-Prozess) |
+| **Typ** | `oneshot` + `RemainAfterExit` |
 | **Abhängigkeit** | `docker.service` |
-| **PID-Dateien** | `/run/systemmap/systemmap-{backend,worker,frontend}.pid` |
-| **Log-Dateien** | `/var/log/systemmap/{backend,worker,frontend}.log` |
+| **PID-Dateien** | `/run/systemmap/systemmap-{backend,worker}.pid` |
+| **Log-Dateien** | `/var/log/systemmap/{backend,worker}.log` |
 | **Neustart** | Automatisch bei Fehler (10s Verzögerung, max. 5× in 5 Min.) |
 | **Autostart** | ✅ Aktiviert via `systemctl enable` |
+| **Docker API** | Automatische Kompatibilität (DOCKER_API_VERSION) |
 
 ```bash
 # Service deinstallieren
@@ -411,26 +413,34 @@ npx tsx prisma/seed.ts   # Admin-User erstellen
 cd ..
 ```
 
-### 5. Frontend einrichten
+### 5. Frontend einrichten und bauen
 
 ```bash
 cd frontend
 npm install
+npm run build     # Erzeugt dist/ für statisches Serving
 cd ..
 ```
 
-### 6. Starten
+### 6. Frontend bauen
 
 ```bash
-# Terminal 1 – Backend
+cd frontend
+npm run build    # Erzeugt dist/ – wird vom Backend statisch ausgeliefert
+cd ..
+```
+
+### 7. Starten
+
+```bash
+# Terminal 1 – Backend (liefert auch das Frontend auf Port 3001 aus)
 cd backend && npx tsx src/index.ts
 
 # Terminal 2 – Worker (BullMQ)
 cd backend && npx tsx src/workers/index.ts
-
-# Terminal 3 – Frontend
-cd frontend && npx vite --host 0.0.0.0
 ```
+
+> 💡 Kein separater Frontend-Server nötig! Das Backend liefert die gebauten Frontend-Dateien direkt über Port 3001 aus.
 
 </details>
 
@@ -692,9 +702,9 @@ SystemMAP/
 │       ├── logger.ts          # Winston-Logger
 │       ├── routes/            # 12 Route-Module (70+ Endpunkte)
 │       ├── services/
-│       │   ├── ai/            # KI-Service (7 Provider, 6 Features)
-│       │   │   ├── index.ts   # AiService Singleton
-│       │   │   ├── types.ts   # TypeScript-Typen
+│       │   ├── ai/            # KI-Service (7 Provider, 6 Features, Config Pre-Parser)
+│       │   │   ├── index.ts   # AiService Singleton + extractConfigHighlights()
+│       │   │   ├── types.ts   # TypeScript-Typen + Discovery-Kommandos
 │       │   │   └── ollama.provider.ts
 │       │   ├── gather-script.ts     # 23-Modul Bash-Script-Generator
 │       │   ├── scan-mapper.service.ts
@@ -727,9 +737,9 @@ SystemMAP/
         │   ├── Profile.tsx         # Profil + Passwort-Änderung
         │   └── Login.tsx
         ├── components/
-        │   ├── Layout.tsx          # Sidebar-Navigation (11 Menüpunkte)
+        │   ├── Layout.tsx          # Auto-Collapsing Sidebar (Icon-only → Hover-Expand)
         │   └── ProcessMap.tsx      # Prozess-Baum-Visualisierung
-        ├── api/client.ts      # Axios-Client
+        ├── api/client.ts      # Axios-Client (3× Retry, Exponential Backoff, Connection-Status)
         └── store/             # Zustand State-Management
 ```
 
@@ -761,8 +771,8 @@ SystemMAP/
 > - [ ] `JWT_SECRET` durch sicheren Zufallswert ersetzen
 > - [ ] `ENCRYPTION_MASTER_KEY` durch sicheren Zufallswert ersetzen
 > - [ ] Standard-Passwort `admin1234` ändern
-> - [ ] Firewall: Ports 3001/5173 nur intern erreichbar machen
-> - [ ] HTTPS-Proxy (Nginx/Caddy) vor das Frontend schalten
+> - [ ] Firewall: Port 3001 nur intern erreichbar machen
+> - [ ] HTTPS-Proxy (Nginx/Caddy) vor Port 3001 schalten
 
 ---
 
@@ -779,9 +789,14 @@ cd SystemMAP
 # Backend (Hot-Reload)
 cd backend && npx tsx src/index.ts
 
-# Frontend (Hot-Reload)
-cd frontend && npx vite --host 0.0.0.0
+# Worker
+cd backend && npx tsx src/workers/index.ts
+
+# Frontend bauen (nach Änderungen)
+cd frontend && npm run build
 ```
+
+> 💡 Für Frontend-Entwicklung kann optional `npx vite --host 0.0.0.0` genutzt werden (Port 5173 mit HMR). Für Produktionsbetrieb und Remote-Zugriff wird das gebaute Frontend direkt vom Backend auf Port 3001 ausgeliefert.
 
 ---
 
