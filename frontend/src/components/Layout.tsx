@@ -63,18 +63,21 @@ export default function Layout() {
 
   return (
     <div className="flex h-full bg-gray-900">
-      {/* Sidebar */}
-      <aside className="w-64 bg-gray-800 border-r border-gray-700 flex flex-col">
-        {/* Logo */}
-        <div className="p-4 border-b border-gray-700">
-          <h1 className="text-xl font-bold text-white flex items-center gap-2">
-            🗺️ SystemMAP
-          </h1>
-          <p className="text-xs text-gray-400 mt-1">Infrastructure Mapping Platform</p>
+      {/* Sidebar – collapsed: nur Icons (w-14), expanded: voll (w-64) */}
+      <aside
+        className="group/sidebar flex flex-col bg-gray-800 border-r border-gray-700 w-14 hover:w-64 transition-all duration-200 overflow-hidden flex-shrink-0"
+      >
+        {/* Logo – immer sichtbar */}
+        <div className="p-3 border-b border-gray-700 flex items-center gap-2 min-h-[56px]">
+          <span className="text-2xl flex-shrink-0">🗺️</span>
+          <div className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
+            <h1 className="text-lg font-bold text-white leading-tight">SystemMAP</h1>
+            <p className="text-[10px] text-gray-400">Infrastructure Mapping</p>
+          </div>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
           {navItems
             .filter((item) => {
               if (item.adminOnly && user?.role !== 'ADMIN') return false;
@@ -87,29 +90,35 @@ export default function Layout() {
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                   isActive
                     ? 'bg-blue-600 text-white'
                     : 'text-gray-300 hover:bg-gray-700 hover:text-white'
                 }`
               }
+              title={item.label}
             >
-              <span className="text-lg">{item.icon}</span>
-              {item.label}
+              <span className="text-lg flex-shrink-0">{item.icon}</span>
+              <span className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity duration-200">
+                {item.label}
+              </span>
             </NavLink>
           ))}
         </nav>
 
         {/* User-Info */}
-        <div className="p-3 border-t border-gray-700">
-          <div className="flex items-center justify-between">
-            <Link to="/profile" className="min-w-0 group">
-              <p className="text-sm font-medium text-white truncate group-hover:text-blue-400 transition-colors">{user?.username}</p>
-              <p className="text-xs text-gray-400 truncate">{user?.role}</p>
+        <div className="p-2 border-t border-gray-700">
+          <div className="flex items-center justify-between gap-2">
+            <Link to="/profile" className="min-w-0 group flex items-center gap-2" title={user?.username}>
+              <span className="text-lg flex-shrink-0">👤</span>
+              <div className="opacity-0 group-hover/sidebar:opacity-100 transition-opacity duration-200 whitespace-nowrap overflow-hidden">
+                <p className="text-sm font-medium text-white truncate group-hover:text-blue-400 transition-colors">{user?.username}</p>
+                <p className="text-xs text-gray-400 truncate">{user?.role}</p>
+              </div>
             </Link>
             <button
               onClick={handleLogout}
-              className="text-gray-400 hover:text-red-400 text-sm px-2 py-1 rounded hover:bg-gray-700 transition-colors"
+              className="text-gray-400 hover:text-red-400 text-sm px-1 py-1 rounded hover:bg-gray-700 transition-colors opacity-0 group-hover/sidebar:opacity-100 flex-shrink-0"
               title="Abmelden"
             >
               ⏻
